@@ -8,6 +8,11 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 
+#define HW_VERSION 2.0
+#define VERSION 2.1
+#define AUTHOR "donkikote"
+#define DEVICE_ID "cat_feeder"
+
 // Stepper Constants
 #define STEPS 3200
 #define STEP_DELAY 1500
@@ -110,9 +115,14 @@ const String stateTopic = "home/cat_feeder/state";
 const String dosageCmdTopic = "home/cat_feeder/dosage";
 const String runningCmdTopic = "home/cat_feeder/running";
 const String weightBasedCmdTopic = "home/cat_feeder/weight_based";
+const String flowCmdTopic = "home/cat_feeder/flow";
+const String scaleZeroCmdTopic = "home/cat_feeder/scale_zero";
+const String clogToleranceCmdTopic = "home/cat_feeder/clog_tolerance";
+const String pullbackDegreesCmdTopic = "home/cat_feeder/pullback_degrees";
 unsigned long lastMqttUpdateTime = 0;
 WiFiClient wifiClient;
 PubSubClient client(wifiClient);
+DynamicJsonDocument deviceInfo(1024);
 
 String twoDigit(int val) {
   String out = "";
@@ -135,77 +145,128 @@ void sendMQTTDiscoveryMessage(String discoveryTopic, DynamicJsonDocument doc) {
   for (int i = 0; i < n; i++) {
       message = message + buffer[i];  // convert *byte to string
   }
-  Serial.print("Sending payload: ");
+  Serial.print("Sending discovery: ");
   Serial.println(message);
   Serial.println(client.publish(discoveryTopic.c_str(), buffer, n));
 }
 
+DynamicJsonDocument buildDiscoveryStub(String name, String id) {
+  DynamicJsonDocument doc(1024);
+  doc["name"] = name;
+  doc["uniq_id"] = id;
+  doc["stat_t"] = stateTopic;
+  doc["device"] = deviceInfo;
+  return doc;
+}
+
 void sendMQTTWeightDiscoveryMessage() {
   String discoveryTopic = "homeassistant/sensor/cat_feeder/weight/config";
-  DynamicJsonDocument doc(1024);
-  doc["name"] = "CF remaining food";
+  DynamicJsonDocument doc = buildDiscoveryStub("CF remaining food", "cf_weight");
   doc["icon"] = "mdi:food-drumstick";
-  doc["stat_t"]   = stateTopic;
   doc["unit_of_meas"] = "g";
   doc["frc_upd"] = false;
   doc["val_tpl"] = "{{ value_json.weight|default(0) }}";
-  Serial.println("Send Weight discovery");
   sendMQTTDiscoveryMessage(discoveryTopic, doc);
 }
 
 void sendMQTTAmountDiscoveryMessage() {
   String discoveryTopic = "homeassistant/number/cat_feeder/amount/config";
-  DynamicJsonDocument doc(1024);
-  doc["name"] = "CF dosage";
+  DynamicJsonDocument doc = buildDiscoveryStub("CF dosage", "cf_amount");
   doc["icon"] = "mdi:weight-gram";
-  doc["stat_t"] = stateTopic;
   doc["cmd_t"] = dosageCmdTopic;
   doc["min"] = 0;
   doc["max"] = 500;
   doc["unit_of_meas"] = "g";
   doc["val_tpl"] = "{{ value_json.dosage|default(0) }}";
-  Serial.println("Send Amount discovery");
   sendMQTTDiscoveryMessage(discoveryTopic, doc);
 }
 
 void sendMQTTRunningDiscoveryMessage() {
   String discoveryTopic = "homeassistant/switch/cat_feeder/running/config";
-  DynamicJsonDocument doc(1024);
-  doc["name"] = "CF running";
+  DynamicJsonDocument doc = buildDiscoveryStub("CF running", "cf_running");
   doc["icon"] = "mdi:food";
-  doc["stat_t"] = stateTopic;
   doc["cmd_t"] = runningCmdTopic;
   doc["payload_on"] = true;
   doc["payload_off"] = false;
   doc["val_tpl"] = "{{ value_json.running|default(false) }}";
-  Serial.println("Send Running discovery");
   sendMQTTDiscoveryMessage(discoveryTopic, doc);
 }
 
 void sendMQTTWeightBasedDiscoveryMessage() {
   String discoveryTopic = "homeassistant/switch/cat_feeder/weight_based/config";
-  DynamicJsonDocument doc(1024);
-  doc["name"] = "CF Weight Based";
+  DynamicJsonDocument doc = buildDiscoveryStub("CF Weight Based", "cf_weight_based");
   doc["icon"] = "mdi:weight";
-  doc["stat_t"] = stateTopic;
   doc["cmd_t"] = weightBasedCmdTopic;
   doc["payload_on"] = true;
   doc["payload_off"] = false;
   doc["val_tpl"] = "{{ value_json.weight_based|default(false) }}";
-  Serial.println("Send Weight Based discovery");
   sendMQTTDiscoveryMessage(discoveryTopic, doc);
 }
 
 void sendMQTTCloggedDiscoveryMessage() {
   String discoveryTopic = "homeassistant/binary_sensor/cat_feeder/clogged/config";
-  DynamicJsonDocument doc(1024);
-  doc["name"] = "CF Clogged";
+  DynamicJsonDocument doc = buildDiscoveryStub("CF Clogged", "cf_clogged");
   doc["dev_cla"] = "problem";
-  doc["stat_t"] = stateTopic;
   doc["payload_on"] = true;
   doc["payload_off"] = false;
   doc["val_tpl"] = "{{ value_json.clogged|default(false) }}";
-  Serial.println("Send Clogged discovery");
+  sendMQTTDiscoveryMessage(discoveryTopic, doc);
+}
+
+void sendMQTTFlowDiscoveryMessage() {
+  String discoveryTopic = "homeassistant/number/cat_feeder/flow/config";
+  DynamicJsonDocument doc = buildDiscoveryStub("CF Revolution flow", "cf_flow");
+  doc["icon"] = "mdi:fan-auto";
+  doc["cmd_t"] = flowCmdTopic;
+  doc["min"] = 0;
+  doc["max"] = 100;
+  doc["unit_of_meas"] = "g";
+  doc["val_tpl"] = "{{ value_json.flow|default(0) }}";
+  sendMQTTDiscoveryMessage(discoveryTopic, doc);
+}
+
+void sendMQTTScaleZeroDiscoveryMessage() {
+  String discoveryTopic = "homeassistant/number/cat_feeder/scale_zero/config";
+  DynamicJsonDocument doc = buildDiscoveryStub("CF Scale Zero", "cf_scale_zero");
+  doc["icon"] = "mdi:fan-auto";
+  doc["cmd_t"] = scaleZeroCmdTopic;
+  doc["min"] = -1000;
+  doc["max"] = 1000;
+  doc["unit_of_meas"] = "g";
+  doc["val_tpl"] = "{{ value_json.scale_zero|default(0) }}";
+  sendMQTTDiscoveryMessage(discoveryTopic, doc);
+}
+
+void sendMQTTClogToleranceDiscoveryMessage() {
+  String discoveryTopic = "homeassistant/number/cat_feeder/clog_tolerance/config";
+  DynamicJsonDocument doc = buildDiscoveryStub("CF Clog Tolerance", "cf_clog_tolerance");
+  doc["icon"] = "mdi:cookie-refresh-outline";
+  doc["cmd_t"] = clogToleranceCmdTopic;
+  doc["min"] = 0;
+  doc["max"] = 100;
+  doc["val_tpl"] = "{{ value_json.clog_tolerance|default(0) }}";
+  sendMQTTDiscoveryMessage(discoveryTopic, doc);
+}
+
+void sendMQTTPullbackDegreesDiscoveryMessage() {
+  String discoveryTopic = "homeassistant/number/cat_feeder/pullback_degrees/config";
+  DynamicJsonDocument doc = buildDiscoveryStub("CF Pullback Degrees", "cf_pullback_degrees");
+  doc["icon"] = "mdi:skip-backward-outline";
+  doc["cmd_t"] = pullbackDegreesCmdTopic;
+  doc["min"] = 0;
+  doc["max"] = 360;
+  doc["unit_of_meas"] = "º";
+  doc["val_tpl"] = "{{ value_json.pullback_degrees|default(0) }}";
+  sendMQTTDiscoveryMessage(discoveryTopic, doc);
+}
+
+void sendMQTTLastDosisDiscoveryMessage() {
+  String discoveryTopic = "homeassistant/sensor/cat_feeder/last_dosis/config";
+  DynamicJsonDocument doc = buildDiscoveryStub("CF Last Dosis", "cf_last_dosis");
+  doc["icon"] = "mdi:food-drumstick-outline";
+  doc["unit_of_meas"] = "g";
+  doc["frc_upd"] = false;
+  doc["val_tpl"] = "{{ value_json.last_dosis|default(0) }}";
   sendMQTTDiscoveryMessage(discoveryTopic, doc);
 }
 
@@ -218,6 +279,11 @@ void sendMqttStatus() {
   doc["running"] = isRunning;
   doc["weight_based"] = isWeightBased;
   doc["clogged"] = isClogged;
+  doc["flow"] = flow;
+  doc["scale_zero"] = scale_zero;
+  doc["clog_tolerance"] = clog_tolerance;
+  doc["pullback_degrees"] = pullbackSteps/degreeSteps;
+  doc["last_dosis"] = lastDosis;
 
   size_t n = serializeJson(doc, buffer);
   Serial.print("Sending mqtt status: ");
@@ -251,10 +317,46 @@ void feed() {
   }
 }
 
-void storeAmount(int amt) {
-  if (amt != amount) {
-    amount = amt;
+void storeAmount(int val) {
+  if (val != amount) {
+    amount = val;
     EEPROM.put(AMOUNT_ADDR, amount);
+  }
+}
+
+void storeFlow(int val){
+  if (val != flow) {
+    flow = val;
+    EEPROM.put(FLOW_ADDR, flow);
+  }
+}
+
+void storeWeightBased(bool val) {
+  if (val != isWeightBased) {
+    isWeightBased = val;
+    EEPROM.put(WEIGHT_BASED_ADDR, isWeightBased);
+  }
+}
+
+void storeScaleZero(int val) {
+  if (val != scale_zero) {
+    scale_zero = val;
+    EEPROM.put(SCALE_FACTOR_ADDR, scale_zero);
+  }
+}
+
+void storeClogTolerance(int val) {
+  if (val != clog_tolerance) {
+    clog_tolerance = val;
+    EEPROM.put(CLOG_TOLERANCE_ADDR, clog_tolerance);
+  }
+}
+
+void storePullbackDegrees(int degrees) {
+  int steps = degrees*degreeSteps;
+  if (steps != pullbackSteps) {
+    pullbackSteps = steps;
+    EEPROM.put(PULLBACK_STEPS_ADDR, pullbackSteps);
   }
 }
 
@@ -275,15 +377,22 @@ void mqttCallback(char *topic, byte *payload, unsigned int length){
       endFeed();
     }
   } else if (dosageCmdTopic == topic) {
-    int dosage = message.toInt();
-    storeAmount(dosage);
+    storeAmount(message.toInt());
     sendMqttStatus();
   } else if (weightBasedCmdTopic == topic){
-     if (message == "True") {
-      isWeightBased = true;
-    } else {
-      isWeightBased = false;
-    }
+    storeWeightBased(message == "True");
+    sendMqttStatus();
+  } else if (flowCmdTopic == topic) {
+    storeFlow(message.toInt());
+    sendMqttStatus();
+  } else if (scaleZeroCmdTopic == topic) {
+    storeScaleZero(message.toInt());
+    sendMqttStatus();
+  } else if (clogToleranceCmdTopic == topic) {
+    storeClogTolerance(message.toInt());
+    sendMqttStatus();
+  } else if (pullbackDegreesCmdTopic == topic) {
+    storePullbackDegrees(message.toInt());
     sendMqttStatus();
   } else {
     Serial.println("Invalid topic");
@@ -294,6 +403,11 @@ void setupMqtt() {
   client.setBufferSize(MQTT_MAX_PACKET_SIZE);
   client.setServer(MQTT_HOST, MQTT_PORT);
   client.setCallback(mqttCallback);
+  deviceInfo["hw_version"] = HW_VERSION;
+  deviceInfo["sw_version"] = VERSION;
+  deviceInfo["identifiers"] = DEVICE_ID;
+  deviceInfo["manufacturer"] = AUTHOR;
+  deviceInfo["name"] = "Cat Feeder";
   while (!client.connected()) {
     Serial.print(".");
 
@@ -304,8 +418,18 @@ void setupMqtt() {
       sendMQTTRunningDiscoveryMessage();
       sendMQTTWeightBasedDiscoveryMessage();
       sendMQTTCloggedDiscoveryMessage();
+      sendMQTTFlowDiscoveryMessage();
+      sendMQTTScaleZeroDiscoveryMessage();
+      sendMQTTClogToleranceDiscoveryMessage();
+      sendMQTTPullbackDegreesDiscoveryMessage();
+      sendMQTTLastDosisDiscoveryMessage();
       client.subscribe(dosageCmdTopic.c_str());
       client.subscribe(runningCmdTopic.c_str());
+      client.subscribe(weightBasedCmdTopic.c_str());
+      client.subscribe(flowCmdTopic.c_str());
+      client.subscribe(scaleZeroCmdTopic.c_str());
+      client.subscribe(clogToleranceCmdTopic.c_str());
+      client.subscribe(pullbackDegreesCmdTopic.c_str());
     } else {
       Serial.println("failed with state ");
       Serial.print(client.state());
@@ -470,11 +594,7 @@ void handle_OnConfig() { //Handler for the body path
         storeAmount(amt);
       }
       if(server.hasArg("flow")) {
-        int flw = server.arg("flow").toInt();
-        if (flw != flow) {
-          flow = flw;
-          EEPROM.put(FLOW_ADDR, flow);
-        }
+        storeFlow(server.arg("flow").toInt());
       }
       float nor = (float)amount/flow;
       if (nor != numberOfRevolutions) {
@@ -496,11 +616,7 @@ void handle_OnConfig() { //Handler for the body path
         }
       }
       if(server.hasArg("scale_zero")) {
-        float tmp = server.arg("scale_zero").toFloat();
-        if (tmp != scale_zero) {
-          scale_zero = tmp;
-          EEPROM.put(SCALE_FACTOR_ADDR, scale_zero);
-        }
+        storeScaleZero(server.arg("scale_zero").toInt());
       }
       if(server.hasArg("scale_error_range")) {
         int tmp = server.arg("scale_error_range").toInt();
@@ -510,11 +626,7 @@ void handle_OnConfig() { //Handler for the body path
         }
       }
       if(server.hasArg("clog_tolerance")) {
-        int tmp = server.arg("clog_tolerance").toInt();
-        if (tmp != clog_tolerance) {
-          clog_tolerance = tmp;
-          EEPROM.put(CLOG_TOLERANCE_ADDR, clog_tolerance);
-        }
+        storeClogTolerance(server.arg("clog_tolerance").toInt());
       }
       if(server.hasArg("pullbackDegrees")) {
         int tmp = server.arg("pullbackDegrees").toInt()*degreeSteps;
@@ -523,13 +635,7 @@ void handle_OnConfig() { //Handler for the body path
           EEPROM.put(PULLBACK_STEPS_ADDR, pullbackSteps);
         }
       }
-      if(server.hasArg("isWeightBased") && !isWeightBased) {
-        isWeightBased = true;
-        EEPROM.put(WEIGHT_BASED_ADDR, isWeightBased);
-      } else if(isWeightBased) {
-        isWeightBased=false;
-        EEPROM.put(WEIGHT_BASED_ADDR, isWeightBased);
-      }
+      storeWeightBased(server.hasArg("isWeightBased"));
       EEPROM.end();
  
       String message = "<div>Body received:\n";
