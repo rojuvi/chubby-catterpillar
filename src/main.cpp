@@ -15,7 +15,7 @@
 
 // Stepper Constants
 #define STEPS 3200
-#define STEP_DELAY 1500
+#define STEP_DEFAULT_DELAY 1500
 #define DIR_PIN D0
 #define STEP_PIN D1
 #define STEPPER_ENABLE_PIN D2
@@ -28,7 +28,7 @@
 #define COUNTER_CLOCKWISE LOW
 
 // EEPROM Constants
-#define EEPROM_SIZE 41
+#define EEPROM_SIZE 48
 #define FREQ_HOURS_ADDR 0
 #define REVS_ADDR 4
 #define FEED_START_HOUR_ADDR 8
@@ -39,7 +39,8 @@
 #define CLOG_TOLERANCE_ADDR 28
 #define SCALE_ERROR_RANGE_ADDR 32
 #define PULLBACK_STEPS_ADDR 36
-#define WEIGHT_BASED_ADDR 37
+#define WEIGHT_BASED_ADDR 40
+#define SPEED_ADDR 44
 
 // Time Constants
 #define TIME_UPDATE_INTERVAL 60000
@@ -76,6 +77,8 @@ int degreeSteps = STEPS/360;
 int stepsPerLoop = degreeSteps;
 int pullbackSteps = 20*degreeSteps;
 int pullbackFrequency = 90*degreeSteps;
+int speed = 10;
+int stepDelay = STEP_DEFAULT_DELAY;
 
 int stepsCount = 0;
 boolean isPullBack = false;
@@ -119,6 +122,7 @@ const String flowCmdTopic = "home/cat_feeder/flow";
 const String scaleZeroCmdTopic = "home/cat_feeder/scale_zero";
 const String clogToleranceCmdTopic = "home/cat_feeder/clog_tolerance";
 const String pullbackDegreesCmdTopic = "home/cat_feeder/pullback_degrees";
+const String speedCmdTopic = "home/cat_feeder/speed";
 unsigned long lastMqttUpdateTime = 0;
 WiFiClient wifiClient;
 PubSubClient client(wifiClient);
@@ -177,6 +181,7 @@ void sendMQTTAmountDiscoveryMessage() {
   doc["min"] = 0;
   doc["max"] = 500;
   doc["unit_of_meas"] = "g";
+  doc["mode"] = "box";
   doc["val_tpl"] = "{{ value_json.dosage|default(0) }}";
   sendMQTTDiscoveryMessage(discoveryTopic, doc);
 }
@@ -221,6 +226,7 @@ void sendMQTTFlowDiscoveryMessage() {
   doc["min"] = 0;
   doc["max"] = 100;
   doc["unit_of_meas"] = "g";
+  doc["mode"] = "box";
   doc["val_tpl"] = "{{ value_json.flow|default(0) }}";
   sendMQTTDiscoveryMessage(discoveryTopic, doc);
 }
@@ -233,6 +239,7 @@ void sendMQTTScaleZeroDiscoveryMessage() {
   doc["min"] = -1000;
   doc["max"] = 1000;
   doc["unit_of_meas"] = "g";
+  doc["mode"] = "box";
   doc["val_tpl"] = "{{ value_json.scale_zero|default(0) }}";
   sendMQTTDiscoveryMessage(discoveryTopic, doc);
 }
@@ -244,6 +251,7 @@ void sendMQTTClogToleranceDiscoveryMessage() {
   doc["cmd_t"] = clogToleranceCmdTopic;
   doc["min"] = 0;
   doc["max"] = 100;
+  doc["mode"] = "box";
   doc["val_tpl"] = "{{ value_json.clog_tolerance|default(0) }}";
   sendMQTTDiscoveryMessage(discoveryTopic, doc);
 }
@@ -256,6 +264,7 @@ void sendMQTTPullbackDegreesDiscoveryMessage() {
   doc["min"] = 0;
   doc["max"] = 360;
   doc["unit_of_meas"] = "º";
+  doc["mode"] = "box";
   doc["val_tpl"] = "{{ value_json.pullback_degrees|default(0) }}";
   sendMQTTDiscoveryMessage(discoveryTopic, doc);
 }
@@ -267,6 +276,18 @@ void sendMQTTLastDosisDiscoveryMessage() {
   doc["unit_of_meas"] = "g";
   doc["frc_upd"] = false;
   doc["val_tpl"] = "{{ value_json.last_dosis|default(0) }}";
+  sendMQTTDiscoveryMessage(discoveryTopic, doc);
+}
+
+void sendMQTTSpeedDiscoveryMessage() {
+  String discoveryTopic = "homeassistant/number/cat_feeder/speed/config";
+  DynamicJsonDocument doc = buildDiscoveryStub("CF Speed", "cf_speed");
+  doc["icon"] = "mdi:speedometer";
+  doc["cmd_t"] = speedCmdTopic;
+  doc["min"] = 0;
+  doc["max"] = 100;
+  doc["mode"] = "box";
+  doc["val_tpl"] = "{{ value_json.speed|default(10) }}";
   sendMQTTDiscoveryMessage(discoveryTopic, doc);
 }
 
@@ -284,6 +305,7 @@ void sendMqttStatus() {
   doc["clog_tolerance"] = clog_tolerance;
   doc["pullback_degrees"] = pullbackSteps/degreeSteps;
   doc["last_dosis"] = lastDosis;
+  doc["speed"] = speed;
 
   size_t n = serializeJson(doc, buffer);
   Serial.print("Sending mqtt status: ");
@@ -360,6 +382,14 @@ void storePullbackDegrees(int degrees) {
   }
 }
 
+void storeSpeed(int val) {
+  if (val != speed) {
+    speed = val;
+    EEPROM.put(SPEED_ADDR, speed);
+    stepDelay = STEP_DEFAULT_DELAY/speed*10;
+  }
+}
+
 void mqttCallback(char *topic, byte *payload, unsigned int length){
   Serial.print("Message arrived in topic: ");
   Serial.println(topic);
@@ -368,8 +398,8 @@ void mqttCallback(char *topic, byte *payload, unsigned int length){
   for (int i = 0; i < length; i++) {
       message = message + (char) payload[i];  // convert *byte to string
   }
-  Serial.print(message);
-  
+  Serial.println(message);
+  EEPROM.begin(EEPROM_SIZE);
   if (runningCmdTopic == topic) {
     if (message == "True") {
       feed();
@@ -394,9 +424,13 @@ void mqttCallback(char *topic, byte *payload, unsigned int length){
   } else if (pullbackDegreesCmdTopic == topic) {
     storePullbackDegrees(message.toInt());
     sendMqttStatus();
+  } else if (speedCmdTopic == topic) {
+    storeSpeed(message.toInt());
+    sendMqttStatus();
   } else {
     Serial.println("Invalid topic");
   }
+  EEPROM.end();
 }
 
 void setupMqtt() {
@@ -423,6 +457,7 @@ void setupMqtt() {
       sendMQTTClogToleranceDiscoveryMessage();
       sendMQTTPullbackDegreesDiscoveryMessage();
       sendMQTTLastDosisDiscoveryMessage();
+      sendMQTTSpeedDiscoveryMessage();
       client.subscribe(dosageCmdTopic.c_str());
       client.subscribe(runningCmdTopic.c_str());
       client.subscribe(weightBasedCmdTopic.c_str());
@@ -430,6 +465,7 @@ void setupMqtt() {
       client.subscribe(scaleZeroCmdTopic.c_str());
       client.subscribe(clogToleranceCmdTopic.c_str());
       client.subscribe(pullbackDegreesCmdTopic.c_str());
+      client.subscribe(speedCmdTopic.c_str());
     } else {
       Serial.println("failed with state ");
       Serial.print(client.state());
@@ -688,7 +724,9 @@ void setup() {
   EEPROM.get(SCALE_ERROR_RANGE_ADDR, scale_error_range);
   EEPROM.get(PULLBACK_STEPS_ADDR, pullbackSteps);
   EEPROM.get(WEIGHT_BASED_ADDR, isWeightBased);
+  EEPROM.get(SPEED_ADDR, speed);
   EEPROM.end();
+  stepDelay = STEP_DEFAULT_DELAY/speed*10;
 
   // Init wifi server
   Serial.println("Conectando ");
@@ -772,9 +810,9 @@ void doStep(int steps, bool clockwise) {
   }
   for (int x = 0; x < steps * 1; x++) {
       digitalWrite(STEP_PIN, HIGH);
-      delayMicroseconds(STEP_DELAY);
+      delayMicroseconds(stepDelay);
       digitalWrite(STEP_PIN, LOW);
-      delayMicroseconds(STEP_DELAY);
+      delayMicroseconds(stepDelay);
    }
 }
 
