@@ -1,5 +1,4 @@
 #include <config.h>
-#include <Stepper.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <EEPROM.h>
@@ -10,13 +9,21 @@
 #include <ArduinoJson.h>
 
 // Stepper Constants
-#define STEPS 2048
-#define STEPS_4H 200
-#define MAX_SPEED 10
-#define MIN_SPEED 1
+#define STEPS 3200
+#define STEP_DELAY 1500
+#define DIR_PIN D0
+#define STEP_PIN D1
+#define STEPPER_ENABLE_PIN D2
+#define M1 D6
+#define M2 D7
+#define M3 D8
+#define STEPPER_ENABLED LOW
+#define STEPPER_DISABLED HIGH
+#define CLOCKWISE HIGH
+#define COUNTER_CLOCKWISE LOW
 
 // EEPROM Constants
-#define EEPROM_SIZE 40
+#define EEPROM_SIZE 41
 #define FREQ_HOURS_ADDR 0
 #define REVS_ADDR 4
 #define FEED_START_HOUR_ADDR 8
@@ -27,6 +34,7 @@
 #define CLOG_TOLERANCE_ADDR 28
 #define SCALE_ERROR_RANGE_ADDR 32
 #define PULLBACK_STEPS_ADDR 36
+#define WEIGHT_BASED_ADDR 37
 
 // Time Constants
 #define TIME_UPDATE_INTERVAL 60000
@@ -34,8 +42,8 @@
 #define AMT_PER_REV 16
 
 // Scale Constants
-#define SCALE_DAT_PIN D5
-#define SCALE_CLK_PIN D6
+#define SCALE_DAT_PIN D3
+#define SCALE_CLK_PIN D4
 #define SCALE_CALIB_FACTOR 466300.0
 
 
@@ -52,9 +60,6 @@ IPAddress dns1(192,168,1,1);
 IPAddress dns2(1,1,1,1);
 ESP8266WebServer server(80);
 
-// Cat feeder config
-Stepper stepper(STEPS, D0, D2, D1, D3);
-
 int hoursFrequency = 6;
 int flow = AMT_PER_REV;
 int amount = 25;
@@ -62,12 +67,10 @@ float numberOfRevolutions = 1.5;
 int hours = 0;
 int minutes = 0;
 boolean isRunning = false;
-int stepsPerLoop = 8;
-int pullbackSteps = 128;
-int pullbackFrequency = 512;
-int microPausa = 1000;
-int dirPin = D1;
-int stepPin = D0;
+int degreeSteps = STEPS/360;
+int stepsPerLoop = degreeSteps;
+int pullbackSteps = 20*degreeSteps;
+int pullbackFrequency = 90*degreeSteps;
 
 int stepsCount = 0;
 boolean isPullBack = false;
@@ -122,6 +125,7 @@ String twoDigit(int val) {
 
 int getWeight() {
   return (int)(scale.get_units()*1000)-scale_zero;
+  // return 0;
 }
 
 void sendMQTTDiscoveryMessage(String discoveryTopic, DynamicJsonDocument doc) {
@@ -359,11 +363,19 @@ String homePage() {
   ptr +="<h2>Scale zero: " + String(scale_zero) + "g</h2>\n";
   ptr +="<h2>Scale Error: +-" + String(scale_error_range) + "g</h2>\n";
   ptr +="<h2>Clog tolerance: " + String(clog_tolerance) + " times</h2>\n";
+  ptr +="<h2>Pullback Degrees: " + String(pullbackSteps/degreeSteps) + "deg</h2>\n";
   ptr +="<h2>Pullback Steps: " + String(pullbackSteps) + " steps</h2>\n";
   ptr +="<h2>Starting food: " + String(startingWeight) + "g</h2>\n";
   ptr +="<h2>Running food: " + String(runningWeight) + "g</h2>\n";
   ptr +="<h2>Remaining food: " + String(getWeight()) + "g</h2>\n";
   ptr +="<h2>Dosis: " + String(dosis) + "g</h2>\n";
+  ptr +="<h2>Weight based: ";
+  if (isWeightBased) {
+    ptr +="<span>True</span>";
+  } else {
+    ptr +="<span>False</span>";
+  }
+  ptr +="</h2>\n";
   ptr +="<h2>Running: ";
   if (isRunning) {
     ptr +="<span>True</span>";
@@ -398,10 +410,17 @@ String homePage() {
   ptr +="<input type=\"number\" step=\"1\" name=\"scale_zero\" value=\"" + String(scale_zero) + "\">\n";
   ptr +="<label for=\"scale_error_range\">Scale Error(g):</label>\n";
   ptr +="<input type=\"number\"  min=\"0\" step=\"1\" name=\"scale_error_range\" value=\"" + String(scale_error_range) + "\">\n";
+  ptr +="<br />\n";
   ptr +="<label for=\"clog_tolerance\">Clog tolerance:</label>\n";
   ptr +="<input type=\"number\" min=\"1\"step=\"1\" name=\"clog_tolerance\" value=\"" + String(clog_tolerance) + "\">\n";
-  ptr +="<label for=\"pullbackSteps\">Pullback Steps:</label>\n";
-  ptr +="<input type=\"number\" min=\"8\"step=\"8\" name=\"pullbackSteps\" value=\"" + String(pullbackSteps) + "\">\n";
+  ptr +="<label for=\"pullbackDegrees\">Pullback Degrees:</label>\n";
+  ptr +="<input type=\"number\" min=\"1\"step=\"1\" name=\"pullbackDegrees\" value=\"" + String(pullbackSteps/degreeSteps) + "\">\n";
+  ptr +="<label for=\"isWeightBased\">Weight based </label>\n";
+  ptr +="<input type=\"checkbox\" name=\"isWeightBased\" ";
+  if (isWeightBased) {
+    ptr +="checked";
+  }
+  ptr += "/>\n";
   ptr +="<br />\n";
   ptr +="<button type=\"submit\">Update config</button>\n";
   ptr +="</form>\n";
@@ -497,22 +516,33 @@ void handle_OnConfig() { //Handler for the body path
           EEPROM.put(CLOG_TOLERANCE_ADDR, clog_tolerance);
         }
       }
-      if(server.hasArg("pullbackSteps")) {
-        int tmp = server.arg("pullbackSteps").toInt();
+      if(server.hasArg("pullbackDegrees")) {
+        int tmp = server.arg("pullbackDegrees").toInt()*degreeSteps;
         if (tmp != pullbackSteps) {
           pullbackSteps = tmp;
           EEPROM.put(PULLBACK_STEPS_ADDR, pullbackSteps);
         }
       }
+      if(server.hasArg("isWeightBased") && !isWeightBased) {
+        isWeightBased = true;
+        EEPROM.put(WEIGHT_BASED_ADDR, isWeightBased);
+      } else if(isWeightBased) {
+        isWeightBased=false;
+        EEPROM.put(WEIGHT_BASED_ADDR, isWeightBased);
+      }
       EEPROM.end();
  
       String message = "<div>Body received:\n";
              message += "Frequency: " + server.arg("frequency") + "\n";
-             message += "Amount: " + server.arg("amount") + "\n</div>";
-             message += "Flow: " + server.arg("flow") + "\n</div>";
-             message += "Hour: " + server.arg("hour") + "\n</div>";
-             message += "Min: " + server.arg("minutes") + "\n</div>";
-             message += "Scale zero: " + server.arg("scale_zeroutes") + "\n</div>";
+             message += "Amount: " + server.arg("amount") + "\n";
+             message += "Flow: " + server.arg("flow") + "\n";
+             message += "Hour: " + server.arg("hour") + "\n";
+             message += "Min: " + server.arg("minutes") + "\n";
+             message += "Scale zero: " + server.arg("scale_zeroutes") + "\n";
+             message += "scale_error_range: " + server.arg("scale_error_range") + "\n";
+             message += "clog_tolerance: " + server.arg("clog_tolerance") + "\n";
+             message += "pullbackSteps: " + server.arg("pullbackSteps") + "\n";
+             message += "isWeightBased: " + server.arg("isWeightBased") + "\n</div>";
              message += "\n";
              message += "<a href=\"/\">Go back</a>\n";
 
@@ -524,6 +554,19 @@ void handle_OnConfig() { //Handler for the body path
 }
 
 void setup() {
+  // Set stepper motor
+  pinMode(DIR_PIN, OUTPUT);
+  pinMode(STEP_PIN, OUTPUT);
+  pinMode(STEPPER_ENABLE_PIN, OUTPUT);
+  pinMode(M1, OUTPUT);
+  pinMode(M2, OUTPUT);
+  pinMode(M3, OUTPUT);
+  digitalWrite(STEPPER_ENABLE_PIN, STEPPER_DISABLED);
+  // Set microstepping https://www.diarioelectronicohoy.com/blog/descripcion-del-driver-a4988
+  digitalWrite(M1, HIGH);
+  digitalWrite(M2, HIGH);
+  digitalWrite(M3, HIGH);
+
   Serial.begin(9600);
 
   // Load programmable data from eeprom
@@ -538,6 +581,7 @@ void setup() {
   EEPROM.get(CLOG_TOLERANCE_ADDR, clog_tolerance);
   EEPROM.get(SCALE_ERROR_RANGE_ADDR, scale_error_range);
   EEPROM.get(PULLBACK_STEPS_ADDR, pullbackSteps);
+  EEPROM.get(WEIGHT_BASED_ADDR, isWeightBased);
   EEPROM.end();
 
   // Init wifi server
@@ -565,9 +609,6 @@ void setup() {
   server.begin();
   Serial.println("HTTP server started");
 
-  // Set stepper motor
-  stepper.setSpeed(MAX_SPEED);
-
   Serial.print("Frequency: ");
   Serial.println(hoursFrequency);
   Serial.print("Revolutions: ");
@@ -588,21 +629,25 @@ void setup() {
 
 void detectClogging() {
   // same or lower value X number of times
-  Serial.print("Dosis/LastDosis: ");
-  Serial.print(dosis);
-  Serial.print("/");
-  Serial.println(lastDosis);
-  if (abs(dosis-lastDosis)<=scale_error_range) {
-    clogDetectedTimes++;
-    if (clogDetectedTimes >= clog_tolerance) {
-      isClogged = true;
-      endFeed();
+  if (isWeightBased) {
+    Serial.print("Dosis/LastDosis: ");
+    Serial.print(dosis);
+    Serial.print("/");
+    Serial.println(lastDosis);
+    if (abs(dosis-lastDosis)<=scale_error_range) {
+      clogDetectedTimes++;
+      if (clogDetectedTimes >= clog_tolerance) {
+        isClogged = true;
+        endFeed();
+      }
+    } else {
+      clogDetectedTimes = 0;
+      isClogged = false;
     }
+    lastDosis = dosis;
   } else {
-    clogDetectedTimes = 0;
     isClogged = false;
-  }
-  lastDosis = dosis;
+  }  
 }
 
 boolean isFeedingEnd() {
@@ -613,8 +658,26 @@ boolean isFeedingEnd() {
   }
 }
 
-void doStep(int steps) {
-  stepper.step(-steps);
+void doStep(int steps, bool clockwise) {
+  if (clockwise) {
+    digitalWrite(DIR_PIN, CLOCKWISE);
+  } else {
+    digitalWrite(DIR_PIN, COUNTER_CLOCKWISE);
+  }
+  for (int x = 0; x < steps * 1; x++) {
+      digitalWrite(STEP_PIN, HIGH);
+      delayMicroseconds(STEP_DELAY);
+      digitalWrite(STEP_PIN, LOW);
+      delayMicroseconds(STEP_DELAY);
+   }
+}
+
+void push(int steps) {
+  doStep(steps, false);
+}
+
+void pull(int steps) {
+  doStep(steps, true);
 }
 
 void loop() {
@@ -627,13 +690,17 @@ void loop() {
   }
   
   if (isRunning) {
+    digitalWrite(STEPPER_ENABLE_PIN, STEPPER_ENABLED);
     if (isPullBack) {
-      doStep(-pullbackSteps);
-      doStep(pullbackSteps);
+      Serial.print("Start pullback");
+      Serial.println(pullbackSteps);
+      pull(pullbackSteps);
+      push(pullbackSteps);
       isPullBack = false;
       detectClogging();
+      Serial.println("End pullback");
     } else {
-      doStep(stepsPerLoop);
+      push(stepsPerLoop);
       stepsCount += stepsPerLoop;
       if (stepsCount % scaleFrequency == 0) {
         runningWeight = getWeight();
@@ -650,6 +717,7 @@ void loop() {
       }
     }
   } else {
+    digitalWrite(STEPPER_ENABLE_PIN, STEPPER_DISABLED);
     client.loop();
     unsigned long exTime = millis();
     if (exTime < lastMqttUpdateTime || exTime-lastMqttUpdateTime > MQTT_PERIODIC_UPDATE_INTERVAL) {
