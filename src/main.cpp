@@ -1,17 +1,10 @@
-#include <config.h>
-#include <ESP8266WiFi.h>
+#include "../lib/config.h"
+#include "../lib/hassio_mqtt_handler.h"
 #include <ESP8266WebServer.h>
 #include <EEPROM.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <HX711.h>
-#include <PubSubClient.h>
-#include <ArduinoJson.h>
-
-#define HW_VERSION 2.0
-#define VERSION 2.1
-#define AUTHOR "donkikote"
-#define DEVICE_ID "cat_feeder"
 
 // Stepper Constants
 #define STEPS 3200
@@ -51,11 +44,6 @@
 #define SCALE_DAT_PIN D3
 #define SCALE_CLK_PIN D4
 #define SCALE_CALIB_FACTOR 466300.0
-
-
-// MQTT Constants
-#define MQTT_MAX_PACKET_SIZE 512
-#define MQTT_PERIODIC_UPDATE_INTERVAL 60000
 
 
 // Wifi config
@@ -112,21 +100,7 @@ float scale_calibration = 466300.0;
 int scale_zero = -288;
 int scale_error_range = 1;
 
-// MQTT Config
-const String mqttName = "Cat Feeder";
-const String stateTopic = "home/cat_feeder/state";
-const String dosageCmdTopic = "home/cat_feeder/dosage";
-const String runningCmdTopic = "home/cat_feeder/running";
-const String weightBasedCmdTopic = "home/cat_feeder/weight_based";
-const String flowCmdTopic = "home/cat_feeder/flow";
-const String scaleZeroCmdTopic = "home/cat_feeder/scale_zero";
-const String clogToleranceCmdTopic = "home/cat_feeder/clog_tolerance";
-const String pullbackDegreesCmdTopic = "home/cat_feeder/pullback_degrees";
-const String speedCmdTopic = "home/cat_feeder/speed";
-unsigned long lastMqttUpdateTime = 0;
-WiFiClient wifiClient;
-PubSubClient client(wifiClient);
-DynamicJsonDocument deviceInfo(1024);
+HassioMqttConnectionManager hassioManager = HassioMqttConnectionManager();
 
 String twoDigit(int val) {
   String out = "";
@@ -142,185 +116,10 @@ int getWeight() {
   // return 0;
 }
 
-void sendMQTTDiscoveryMessage(String discoveryTopic, DynamicJsonDocument doc) {
-  char buffer[MQTT_MAX_PACKET_SIZE];
-  size_t n = serializeJson(doc, buffer);
-  String message;
-  for (int i = 0; i < n; i++) {
-      message = message + buffer[i];  // convert *byte to string
-  }
-  Serial.print("Sending discovery: ");
-  Serial.println(message);
-  Serial.println(client.publish(discoveryTopic.c_str(), buffer, n));
-}
-
-DynamicJsonDocument buildDiscoveryStub(String name, String id) {
-  DynamicJsonDocument doc(1024);
-  doc["name"] = name;
-  doc["uniq_id"] = id;
-  doc["stat_t"] = stateTopic;
-  doc["device"] = deviceInfo;
-  return doc;
-}
-
-void sendMQTTWeightDiscoveryMessage() {
-  String discoveryTopic = "homeassistant/sensor/cat_feeder/weight/config";
-  DynamicJsonDocument doc = buildDiscoveryStub("CF remaining food", "cf_weight");
-  doc["icon"] = "mdi:food-drumstick";
-  doc["unit_of_meas"] = "g";
-  doc["frc_upd"] = false;
-  doc["val_tpl"] = "{{ value_json.weight|default(0) }}";
-  sendMQTTDiscoveryMessage(discoveryTopic, doc);
-}
-
-void sendMQTTAmountDiscoveryMessage() {
-  String discoveryTopic = "homeassistant/number/cat_feeder/amount/config";
-  DynamicJsonDocument doc = buildDiscoveryStub("CF dosage", "cf_amount");
-  doc["icon"] = "mdi:weight-gram";
-  doc["cmd_t"] = dosageCmdTopic;
-  doc["min"] = 0;
-  doc["max"] = 500;
-  doc["unit_of_meas"] = "g";
-  doc["mode"] = "box";
-  doc["val_tpl"] = "{{ value_json.dosage|default(0) }}";
-  sendMQTTDiscoveryMessage(discoveryTopic, doc);
-}
-
-void sendMQTTRunningDiscoveryMessage() {
-  String discoveryTopic = "homeassistant/switch/cat_feeder/running/config";
-  DynamicJsonDocument doc = buildDiscoveryStub("CF running", "cf_running");
-  doc["icon"] = "mdi:food";
-  doc["cmd_t"] = runningCmdTopic;
-  doc["payload_on"] = true;
-  doc["payload_off"] = false;
-  doc["val_tpl"] = "{{ value_json.running|default(false) }}";
-  sendMQTTDiscoveryMessage(discoveryTopic, doc);
-}
-
-void sendMQTTWeightBasedDiscoveryMessage() {
-  String discoveryTopic = "homeassistant/switch/cat_feeder/weight_based/config";
-  DynamicJsonDocument doc = buildDiscoveryStub("CF Weight Based", "cf_weight_based");
-  doc["icon"] = "mdi:weight";
-  doc["cmd_t"] = weightBasedCmdTopic;
-  doc["payload_on"] = true;
-  doc["payload_off"] = false;
-  doc["val_tpl"] = "{{ value_json.weight_based|default(false) }}";
-  sendMQTTDiscoveryMessage(discoveryTopic, doc);
-}
-
-void sendMQTTCloggedDiscoveryMessage() {
-  String discoveryTopic = "homeassistant/binary_sensor/cat_feeder/clogged/config";
-  DynamicJsonDocument doc = buildDiscoveryStub("CF Clogged", "cf_clogged");
-  doc["dev_cla"] = "problem";
-  doc["payload_on"] = true;
-  doc["payload_off"] = false;
-  doc["val_tpl"] = "{{ value_json.clogged|default(false) }}";
-  sendMQTTDiscoveryMessage(discoveryTopic, doc);
-}
-
-void sendMQTTFlowDiscoveryMessage() {
-  String discoveryTopic = "homeassistant/number/cat_feeder/flow/config";
-  DynamicJsonDocument doc = buildDiscoveryStub("CF Revolution flow", "cf_flow");
-  doc["icon"] = "mdi:fan-auto";
-  doc["cmd_t"] = flowCmdTopic;
-  doc["min"] = 0;
-  doc["max"] = 100;
-  doc["unit_of_meas"] = "g";
-  doc["mode"] = "box";
-  doc["val_tpl"] = "{{ value_json.flow|default(0) }}";
-  sendMQTTDiscoveryMessage(discoveryTopic, doc);
-}
-
-void sendMQTTScaleZeroDiscoveryMessage() {
-  String discoveryTopic = "homeassistant/number/cat_feeder/scale_zero/config";
-  DynamicJsonDocument doc = buildDiscoveryStub("CF Scale Zero", "cf_scale_zero");
-  doc["icon"] = "mdi:fan-auto";
-  doc["cmd_t"] = scaleZeroCmdTopic;
-  doc["min"] = -1000;
-  doc["max"] = 1000;
-  doc["unit_of_meas"] = "g";
-  doc["mode"] = "box";
-  doc["val_tpl"] = "{{ value_json.scale_zero|default(0) }}";
-  sendMQTTDiscoveryMessage(discoveryTopic, doc);
-}
-
-void sendMQTTClogToleranceDiscoveryMessage() {
-  String discoveryTopic = "homeassistant/number/cat_feeder/clog_tolerance/config";
-  DynamicJsonDocument doc = buildDiscoveryStub("CF Clog Tolerance", "cf_clog_tolerance");
-  doc["icon"] = "mdi:cookie-refresh-outline";
-  doc["cmd_t"] = clogToleranceCmdTopic;
-  doc["min"] = 0;
-  doc["max"] = 100;
-  doc["mode"] = "box";
-  doc["val_tpl"] = "{{ value_json.clog_tolerance|default(0) }}";
-  sendMQTTDiscoveryMessage(discoveryTopic, doc);
-}
-
-void sendMQTTPullbackDegreesDiscoveryMessage() {
-  String discoveryTopic = "homeassistant/number/cat_feeder/pullback_degrees/config";
-  DynamicJsonDocument doc = buildDiscoveryStub("CF Pullback Degrees", "cf_pullback_degrees");
-  doc["icon"] = "mdi:skip-backward-outline";
-  doc["cmd_t"] = pullbackDegreesCmdTopic;
-  doc["min"] = 0;
-  doc["max"] = 360;
-  doc["unit_of_meas"] = "º";
-  doc["mode"] = "box";
-  doc["val_tpl"] = "{{ value_json.pullback_degrees|default(0) }}";
-  sendMQTTDiscoveryMessage(discoveryTopic, doc);
-}
-
-void sendMQTTLastDosisDiscoveryMessage() {
-  String discoveryTopic = "homeassistant/sensor/cat_feeder/last_dosis/config";
-  DynamicJsonDocument doc = buildDiscoveryStub("CF Last Dosis", "cf_last_dosis");
-  doc["icon"] = "mdi:food-drumstick-outline";
-  doc["unit_of_meas"] = "g";
-  doc["frc_upd"] = false;
-  doc["val_tpl"] = "{{ value_json.last_dosis|default(0) }}";
-  sendMQTTDiscoveryMessage(discoveryTopic, doc);
-}
-
-void sendMQTTSpeedDiscoveryMessage() {
-  String discoveryTopic = "homeassistant/number/cat_feeder/speed/config";
-  DynamicJsonDocument doc = buildDiscoveryStub("CF Speed", "cf_speed");
-  doc["icon"] = "mdi:speedometer";
-  doc["cmd_t"] = speedCmdTopic;
-  doc["min"] = 0;
-  doc["max"] = 100;
-  doc["mode"] = "box";
-  doc["val_tpl"] = "{{ value_json.speed|default(10) }}";
-  sendMQTTDiscoveryMessage(discoveryTopic, doc);
-}
-
-void sendMqttStatus() {
-  DynamicJsonDocument doc(1024);
-  char buffer[256];
-
-  doc["weight"] = getWeight();
-  doc["dosage"] = amount;
-  doc["running"] = isRunning;
-  doc["weight_based"] = isWeightBased;
-  doc["clogged"] = isClogged;
-  doc["flow"] = flow;
-  doc["scale_zero"] = scale_zero;
-  doc["clog_tolerance"] = clog_tolerance;
-  doc["pullback_degrees"] = pullbackSteps/degreeSteps;
-  doc["last_dosis"] = lastDosis;
-  doc["speed"] = speed;
-
-  size_t n = serializeJson(doc, buffer);
-  Serial.print("Sending mqtt status: ");
-  String message;
-  serializeJson(doc, message);
-  Serial.println(message);
-
-  bool published = client.publish(stateTopic.c_str(), buffer, n);
-  lastMqttUpdateTime = millis();
-}
-
 void endFeed() {
   Serial.println("Stop turning at steps: " + String(stepsCount));
   isRunning = false;
-  sendMqttStatus();
+  hassioManager.publishStatus();
 }
 
 void feed() {
@@ -335,7 +134,7 @@ void feed() {
     isRunning = true;
 
     clogDetectedTimes = 0;
-    sendMqttStatus();
+    hassioManager.publishStatus();
   }
 }
 
@@ -400,79 +199,37 @@ void mqttCallback(char *topic, byte *payload, unsigned int length){
   }
   Serial.println(message);
   EEPROM.begin(EEPROM_SIZE);
-  if (runningCmdTopic == topic) {
+  if (hassioManager.runningCmdTopic == topic) {
     if (message == "True") {
       feed();
     } else {
       endFeed();
     }
-  } else if (dosageCmdTopic == topic) {
+  } else if (hassioManager.dosageCmdTopic == topic) {
     storeAmount(message.toInt());
-    sendMqttStatus();
-  } else if (weightBasedCmdTopic == topic){
+    hassioManager.publishStatus();
+  } else if (hassioManager.weightBasedCmdTopic == topic){
     storeWeightBased(message == "True");
-    sendMqttStatus();
-  } else if (flowCmdTopic == topic) {
+    hassioManager.publishStatus();
+  } else if (hassioManager.flowCmdTopic == topic) {
     storeFlow(message.toInt());
-    sendMqttStatus();
-  } else if (scaleZeroCmdTopic == topic) {
+    hassioManager.publishStatus();
+  } else if (hassioManager.scaleZeroCmdTopic == topic) {
     storeScaleZero(message.toInt());
-    sendMqttStatus();
-  } else if (clogToleranceCmdTopic == topic) {
+    hassioManager.publishStatus();
+  } else if (hassioManager.clogToleranceCmdTopic == topic) {
     storeClogTolerance(message.toInt());
-    sendMqttStatus();
-  } else if (pullbackDegreesCmdTopic == topic) {
+    hassioManager.publishStatus();
+  } else if (hassioManager.pullbackDegreesCmdTopic == topic) {
     storePullbackDegrees(message.toInt());
-    sendMqttStatus();
-  } else if (speedCmdTopic == topic) {
+    hassioManager.publishStatus();
+  } else if (hassioManager.speedCmdTopic == topic) {
     storeSpeed(message.toInt());
-    sendMqttStatus();
+    hassioManager.publishStatus();
   } else {
     Serial.println("Invalid topic");
   }
   EEPROM.end();
-}
-
-void setupMqtt() {
-  client.setBufferSize(MQTT_MAX_PACKET_SIZE);
-  client.setServer(MQTT_HOST, MQTT_PORT);
-  client.setCallback(mqttCallback);
-  deviceInfo["hw_version"] = HW_VERSION;
-  deviceInfo["sw_version"] = VERSION;
-  deviceInfo["identifiers"] = DEVICE_ID;
-  deviceInfo["manufacturer"] = AUTHOR;
-  deviceInfo["name"] = "Cat Feeder";
-  while (!client.connected()) {
-    Serial.print(".");
-
-    if (client.connect(mqttName.c_str(), MQTT_USER, MQTT_PASS)) {
-      Serial.println("Connected to MQTT");
-      sendMQTTAmountDiscoveryMessage();
-      sendMQTTWeightDiscoveryMessage();
-      sendMQTTRunningDiscoveryMessage();
-      sendMQTTWeightBasedDiscoveryMessage();
-      sendMQTTCloggedDiscoveryMessage();
-      sendMQTTFlowDiscoveryMessage();
-      sendMQTTScaleZeroDiscoveryMessage();
-      sendMQTTClogToleranceDiscoveryMessage();
-      sendMQTTPullbackDegreesDiscoveryMessage();
-      sendMQTTLastDosisDiscoveryMessage();
-      sendMQTTSpeedDiscoveryMessage();
-      client.subscribe(dosageCmdTopic.c_str());
-      client.subscribe(runningCmdTopic.c_str());
-      client.subscribe(weightBasedCmdTopic.c_str());
-      client.subscribe(flowCmdTopic.c_str());
-      client.subscribe(scaleZeroCmdTopic.c_str());
-      client.subscribe(clogToleranceCmdTopic.c_str());
-      client.subscribe(pullbackDegreesCmdTopic.c_str());
-      client.subscribe(speedCmdTopic.c_str());
-    } else {
-      Serial.println("failed with state ");
-      Serial.print(client.state());
-      delay(2000);
-    }
-  }
-  sendMqttStatus();
 }
 
 void checkTime() {
@@ -692,7 +449,7 @@ void handle_OnConfig() { //Handler for the body path
       server.send(302, "text/plane","");
 //      server.send(200, "text/html", makeHTML(message));
       Serial.println(message);
-      sendMqttStatus();
+      hassioManager.publishStatus();
 }
 
 void setup() {
@@ -763,7 +520,7 @@ void setup() {
   scale.set_scale(SCALE_CALIB_FACTOR);
   
   // MQTT init
-  setupMqtt();
+  hassioManager.setup(mqttCallback);
 
   // Time init
   timeClient.begin();
@@ -849,8 +606,8 @@ void loop() {
       if (stepsCount % scaleFrequency == 0) {
         runningWeight = getWeight();
         dosis = startingWeight-runningWeight;
-        sendMqttStatus();
-        client.loop();
+        hassioManager.publishStatus();
+        hassioManager.loop();
       }
       
       if (isFeedingEnd()) {
@@ -862,10 +619,10 @@ void loop() {
     }
   } else {
     digitalWrite(STEPPER_ENABLE_PIN, STEPPER_DISABLED);
-    client.loop();
+    hassioManager.loop();
     unsigned long exTime = millis();
-    if (exTime < lastMqttUpdateTime || exTime-lastMqttUpdateTime > MQTT_PERIODIC_UPDATE_INTERVAL) {
-      setupMqtt(); // Just to ensure any server restarts prevent the CF from working
+    if (exTime < hassioManager.lastMqttUpdateTime || exTime-hassioManager.lastMqttUpdateTime > MQTT_PERIODIC_UPDATE_INTERVAL) {
+      hassioManager.setup(mqttCallback); // Just to ensure any server restarts prevent the CF from working
     }
   }
 }

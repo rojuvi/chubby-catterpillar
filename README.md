@@ -1,2 +1,2 @@
-# chubby-catterpillar
-A Home Assistant MQTT enabled cat feeder system
+# chubby-caterpillar
+A Home Assistant MQTT-enabled cat feeder system
