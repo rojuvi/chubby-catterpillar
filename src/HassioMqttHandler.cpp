@@ -1,13 +1,24 @@
-#include "hassio_mqtt_handler.h"
-#include "config.h"
+#include "HassioMqttHandler.h"
 
-#include <ESP8266WiFi.h>
-
-HassioMqttConnectionManager::HassioMqttConnectionManager() {
+HassioMqttConnectionManager::HassioMqttConnectionManager(double hardwareVersion, double softwareVersion, const char * author, const char * deviceId, const char * deviceName) {
     this->lastMqttUpdateTime = 0;
     this->wifiClient = WiFiClient();
     pubSubClient = PubSubClient(wifiClient);
-    this->deviceInfo = DynamicJsonDocument(DEFAULT_JSON_SIZE);
+    this->hardwareVersion = hardwareVersion;
+    this->softwareVersion = softwareVersion;
+    this->author = author;
+    this->deviceId = deviceId;
+    this->deviceName = deviceName;
+}
+
+DynamicJsonDocument HassioMqttConnectionManager::getDeviceInfoJson() {
+    DynamicJsonDocument deviceInfo(DEFAULT_JSON_SIZE);
+    deviceInfo["hw_version"] = hardwareVersion;
+    deviceInfo["sw_version"] = softwareVersion;
+    deviceInfo["manufacturer"] = author;
+    deviceInfo["identifiers"] = deviceId;
+    deviceInfo["name"] = deviceName;
+    return deviceInfo;
 }
 
 DynamicJsonDocument HassioMqttConnectionManager::buildDiscoveryStub(String name, String id) {
@@ -15,23 +26,18 @@ DynamicJsonDocument HassioMqttConnectionManager::buildDiscoveryStub(String name,
     doc["name"] = name;
     doc["uniq_id"] = id;
     doc["stat_t"] = stateTopic;
-    doc["device"] = deviceInfo;
+    doc["device"] = getDeviceInfoJson();
     return doc;
 }
 
-void HassioMqttConnectionManager::setup(MQTT_CALLBACK_SIGNATURE) {
+void HassioMqttConnectionManager::setup(const char * host, int port, const char * user, const char * pass, MQTT_CALLBACK_SIGNATURE) {
     pubSubClient.setBufferSize(MQTT_MAX_PACKET_SIZE);
-    pubSubClient.setServer(MQTT_HOST, MQTT_PORT);
+    pubSubClient.setServer(host, port);
     pubSubClient.setCallback(callback);
-    deviceInfo["hw_version"] = HW_VERSION;
-    deviceInfo["sw_version"] = VERSION;
-    deviceInfo["identifiers"] = DEVICE_ID;
-    deviceInfo["manufacturer"] = AUTHOR;
-    deviceInfo["name"] = "Cat Feeder";
     while (!pubSubClient.connected()) {
         Serial.print(".");
 
-        if (pubSubClient.connect(mqttName.c_str(), MQTT_USER, MQTT_PASS)) {
+        if (pubSubClient.connect(mqttName.c_str(), user, pass)) {
         Serial.println("Connected to MQTT");
         sendMQTTAmountDiscoveryMessage();
         sendMQTTWeightDiscoveryMessage();
@@ -64,11 +70,40 @@ void HassioMqttConnectionManager::loop() {
     pubSubClient.loop();
 }
 
+void HassioMqttConnectionManager::HassioMqttConnectionManager::publishStatus(
+    int weight, int amount, bool isRunning, bool isWeightBased, bool isClogged, int flow, 
+    int scaleZero, int clogTolerance, int pullbackDegrees, int lastDosis, int speed
+) {
+    DynamicJsonDocument doc(DEFAULT_JSON_SIZE);
+    char buffer[256];
+
+    doc["weight"] = weight;
+    doc["dosage"] = amount;
+    doc["running"] = isRunning;
+    doc["weight_based"] = isWeightBased;
+    doc["clogged"] = isClogged;
+    doc["flow"] = flow;
+    doc["scale_zero"] = scaleZero;
+    doc["clog_tolerance"] = clogTolerance;
+    doc["pullback_degrees"] = pullbackDegrees;
+    doc["last_dosis"] = lastDosis;
+    doc["speed"] = speed;
+
+    size_t n = serializeJson(doc, buffer);
+    Serial.print("Sending mqtt status: ");
+    String message;
+    serializeJson(doc, message);
+    Serial.println(message);
+
+    pubSubClient.publish(stateTopic.c_str(), buffer, n);
+    this->lastMqttUpdateTime = millis();
+}
+
 void HassioMqttConnectionManager::sendMQTTDiscoveryMessage(String discoveryTopic, DynamicJsonDocument doc) {
     char buffer[MQTT_MAX_PACKET_SIZE];
     size_t n = serializeJson(doc, buffer);
     String message;
-    for (int i = 0; i < n; i++) {
+    for (unsigned int i = 0; i < n; i++) {
         message = message + buffer[i];  // convert *byte to string
     }
     Serial.print("Sending discovery: ");
@@ -203,40 +238,3 @@ void HassioMqttConnectionManager::sendMQTTSpeedDiscoveryMessage() {
     doc["val_tpl"] = "{{ value_json.speed|default(10) }}";
     sendMQTTDiscoveryMessage(discoveryTopic, doc);
 }
-
-/*
-void HassioMqttConnectionManager::publishStatus() {
-    DynamicJsonDocument doc(1024);
-    char buffer[256];
-
-    doc["weight"] = getWeight();
-    doc["dosage"] = amount;
-    doc["running"] = isRunning;
-    doc["weight_based"] = isWeightBased;
-    doc["clogged"] = isClogged;
-    doc["flow"] = flow;
-    doc["scale_zero"] = scale_zero;
-    doc["clog_tolerance"] = clog_tolerance;
-    doc["pullback_degrees"] = pullbackSteps/degreeSteps;
-    doc["last_dosis"] = lastDosis;
-    doc["speed"] = speed;
-
-    size_t n = serializeJson(doc, buffer);
-    Serial.print("Sending mqtt status: ");
-    String message;
-    serializeJson(doc, message);
-    Serial.println(message);
-
-    bool published = pubSubClient.publish(stateTopic.c_str(), buffer, n);
-    lastMqttUpdateTime = millis();
-}
-*/
-
-/*
-class HassioMqttConnectionManager{
-
-    
-
-    
-};
-*/

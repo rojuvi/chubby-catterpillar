@@ -1,5 +1,5 @@
-#include "../lib/config.h"
-#include "../lib/hassio_mqtt_handler.h"
+#include "config.h"
+#include "HassioMqttHandler.h"
 #include <ESP8266WebServer.h>
 #include <EEPROM.h>
 #include <NTPClient.h>
@@ -100,7 +100,9 @@ float scale_calibration = 466300.0;
 int scale_zero = -288;
 int scale_error_range = 1;
 
-HassioMqttConnectionManager hassioManager = HassioMqttConnectionManager();
+HassioMqttConnectionManager hassioManager(
+  HW_VERSION, VERSION, AUTHOR, DEVICE_ID, DEVICE_NAME
+);
 
 String twoDigit(int val) {
   String out = "";
@@ -116,10 +118,26 @@ int getWeight() {
   // return 0;
 }
 
+void publishStatus() {
+  hassioManager.publishStatus(
+    getWeight(),
+    amount,
+    isRunning,
+    isWeightBased,
+    isClogged,
+    flow,
+    scale_zero,
+    clog_tolerance,
+    pullbackSteps/degreeSteps,
+    lastDosis,
+    speed
+  );
+}
+
 void endFeed() {
   Serial.println("Stop turning at steps: " + String(stepsCount));
   isRunning = false;
-  hassioManager.publishStatus();
+  publishStatus();
 }
 
 void feed() {
@@ -134,7 +152,7 @@ void feed() {
     isRunning = true;
 
     clogDetectedTimes = 0;
-    hassioManager.publishStatus();
+    publishStatus();
   }
 }
 
@@ -194,7 +212,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length){
   Serial.println(topic);
   Serial.print("Message:");
   String message;
-  for (int i = 0; i < length; i++) {
+  for (unsigned int i = 0; i < length; i++) {
       message = message + (char) payload[i];  // convert *byte to string
   }
   Serial.println(message);
@@ -207,25 +225,25 @@ void mqttCallback(char *topic, byte *payload, unsigned int length){
     }
   } else if (hassioManager.dosageCmdTopic == topic) {
     storeAmount(message.toInt());
-    hassioManager.publishStatus();
+    publishStatus();
   } else if (hassioManager.weightBasedCmdTopic == topic){
     storeWeightBased(message == "True");
-    hassioManager.publishStatus();
+    publishStatus();
   } else if (hassioManager.flowCmdTopic == topic) {
     storeFlow(message.toInt());
-    hassioManager.publishStatus();
+    publishStatus();
   } else if (hassioManager.scaleZeroCmdTopic == topic) {
     storeScaleZero(message.toInt());
-    hassioManager.publishStatus();
+    publishStatus();
   } else if (hassioManager.clogToleranceCmdTopic == topic) {
     storeClogTolerance(message.toInt());
-    hassioManager.publishStatus();
+    publishStatus();
   } else if (hassioManager.pullbackDegreesCmdTopic == topic) {
     storePullbackDegrees(message.toInt());
-    hassioManager.publishStatus();
+    publishStatus();
   } else if (hassioManager.speedCmdTopic == topic) {
     storeSpeed(message.toInt());
-    hassioManager.publishStatus();
+    publishStatus();
   } else {
     Serial.println("Invalid topic");
   }
@@ -449,7 +467,11 @@ void handle_OnConfig() { //Handler for the body path
       server.send(302, "text/plane","");
 //      server.send(200, "text/html", makeHTML(message));
       Serial.println(message);
-      hassioManager.publishStatus();
+      publishStatus();
+}
+
+void setupMqtt() {
+  hassioManager.setup(MQTT_HOST, MQTT_PORT, MQTT_USER, MQTT_PASS, mqttCallback);
 }
 
 void setup() {
@@ -520,7 +542,7 @@ void setup() {
   scale.set_scale(SCALE_CALIB_FACTOR);
   
   // MQTT init
-  hassioManager.setup(mqttCallback);
+  setupMqtt();
 
   // Time init
   timeClient.begin();
@@ -606,7 +628,7 @@ void loop() {
       if (stepsCount % scaleFrequency == 0) {
         runningWeight = getWeight();
         dosis = startingWeight-runningWeight;
-        hassioManager.publishStatus();
+        publishStatus();
         hassioManager.loop();
       }
       
@@ -622,7 +644,7 @@ void loop() {
     hassioManager.loop();
     unsigned long exTime = millis();
     if (exTime < hassioManager.lastMqttUpdateTime || exTime-hassioManager.lastMqttUpdateTime > MQTT_PERIODIC_UPDATE_INTERVAL) {
-      hassioManager.setup(mqttCallback); // Just to ensure any server restarts prevent the CF from working
+      setupMqtt(); // Just to ensure no server restarts prevent the CF from working
     }
   }
 }

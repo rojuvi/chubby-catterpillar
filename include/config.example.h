@@ -7,6 +7,7 @@
 #define VERSION 2.1
 #define AUTHOR "donkikote"
 #define DEVICE_ID "cat_feeder"
+#define DEVICE_NAME "Cat Feeder"
 
 // Wifi config
 #define WIFI_SSID "<your wifi SSID>"
