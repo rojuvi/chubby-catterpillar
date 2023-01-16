@@ -472,6 +472,7 @@ void handle_OnConfig() { //Handler for the body path
 
 void setupMqtt() {
   hassioManager.setup(MQTT_HOST, MQTT_PORT, MQTT_USER, MQTT_PASS, mqttCallback);
+  publishStatus();
 }
 
 void setup() {

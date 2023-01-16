@@ -7,7 +7,7 @@
 
 // MQTT Constants
 #define MQTT_MAX_PACKET_SIZE 512
-#define MQTT_PERIODIC_UPDATE_INTERVAL 60000
+#define MQTT_PERIODIC_UPDATE_INTERVAL 10000
 #define DEFAULT_JSON_SIZE 1024
 
 class HassioMqttConnectionManager {
@@ -49,7 +49,7 @@ class HassioMqttConnectionManager {
         const String speedCmdTopic = "home/cat_feeder/speed";
 
         HassioMqttConnectionManager(double hardwareVersion, double softwareVersion, const char * author, const char * deviceId, const char * deviceName);
-        void publishStatus(int weight, int amount, bool isRunning, bool isWeightBased, bool isClogged, int flow, int scaleZero, int clogTolerance, int pullbackDegrees, int lastDosis, int speed);
+        void publishStatus(float weight, int amount, bool isRunning, bool isWeightBased, bool isClogged, int flow, int scaleZero, int clogTolerance, int pullbackDegrees, int lastDosis, int speed);
         void setup(const char * host, int port, const char * user, const char * pass, MQTT_CALLBACK_SIGNATURE);
         void loop();
 };

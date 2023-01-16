@@ -71,7 +71,7 @@ void HassioMqttConnectionManager::loop() {
 }
 
 void HassioMqttConnectionManager::HassioMqttConnectionManager::publishStatus(
-    int weight, int amount, bool isRunning, bool isWeightBased, bool isClogged, int flow, 
+    float weight, int amount, bool isRunning, bool isWeightBased, bool isClogged, int flow, 
     int scaleZero, int clogTolerance, int pullbackDegrees, int lastDosis, int speed
 ) {
     DynamicJsonDocument doc(DEFAULT_JSON_SIZE);
@@ -117,7 +117,7 @@ void HassioMqttConnectionManager::sendMQTTWeightDiscoveryMessage() {
     doc["icon"] = "mdi:food-drumstick";
     doc["unit_of_meas"] = "g";
     doc["frc_upd"] = false;
-    doc["val_tpl"] = "{{ value_json.weight|default(0) }}";
+    doc["val_tpl"] = "{{ value_json.weight|default(0.00) }}";
     sendMQTTDiscoveryMessage(discoveryTopic, doc);
 }
 
