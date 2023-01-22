@@ -1,0 +1,1 @@
+{"name":"CF Revolution flow","uniq_id":"cf_flow","stat_t":"home/cat_feeder/state","device":{"hw_version":1,"sw_version":2,"manufacturer":"testAuthor","identifiers":"testDeviceId","name":"testDevice"},"icon":"mdi:fan-auto","cmd_t":"home/cat_feeder/flow","min":0,"max":100,"unit_of_meas":"g","mode":"box","val_tpl":"{{ value_json.flow|default(0) }}"}

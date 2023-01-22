@@ -1,0 +1,1 @@
+{"name":"CF Clogged","uniq_id":"cf_clogged","stat_t":"home/cat_feeder/state","device":{"hw_version":1,"sw_version":2,"manufacturer":"testAuthor","identifiers":"testDeviceId","name":"testDevice"},"dev_cla":"problem","payload_on":true,"payload_off":false,"val_tpl":"{{ value_json.clogged|default(false) }}"}

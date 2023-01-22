@@ -1,0 +1,1 @@
+{"name":"CF Clog Tolerance","uniq_id":"cf_clog_tolerance","stat_t":"home/cat_feeder/state","device":{"hw_version":1,"sw_version":2,"manufacturer":"testAuthor","identifiers":"testDeviceId","name":"testDevice"},"icon":"mdi:cookie-refresh-outline","cmd_t":"home/cat_feeder/clog_tolerance","min":0,"max":100,"mode":"box","val_tpl":"{{ value_json.clog_tolerance|default(0) }}"}

@@ -1,0 +1,1 @@
+{"name":"CF Scale Zero","uniq_id":"cf_scale_zero","stat_t":"home/cat_feeder/state","device":{"hw_version":1,"sw_version":2,"manufacturer":"testAuthor","identifiers":"testDeviceId","name":"testDevice"},"icon":"mdi:fan-auto","cmd_t":"home/cat_feeder/scale_zero","min":-1000,"max":1000,"unit_of_meas":"g","mode":"box","val_tpl":"{{ value_json.scale_zero|default(0) }}"}

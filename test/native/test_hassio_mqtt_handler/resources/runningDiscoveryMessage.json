@@ -1,0 +1,1 @@
+{"name":"CF running","uniq_id":"cf_running","stat_t":"home/cat_feeder/state","device":{"hw_version":1,"sw_version":2,"manufacturer":"testAuthor","identifiers":"testDeviceId","name":"testDevice"},"icon":"mdi:food","cmd_t":"home/cat_feeder/running","payload_on":true,"payload_off":false,"val_tpl":"{{ value_json.running|default(false) }}"}

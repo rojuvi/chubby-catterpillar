@@ -1,0 +1,1 @@
+{"name":"CF Speed","uniq_id":"cf_speed","stat_t":"home/cat_feeder/state","device":{"hw_version":1,"sw_version":2,"manufacturer":"testAuthor","identifiers":"testDeviceId","name":"testDevice"},"icon":"mdi:speedometer","cmd_t":"home/cat_feeder/speed","min":0,"max":100,"mode":"box","val_tpl":"{{ value_json.speed|default(10) }}"}

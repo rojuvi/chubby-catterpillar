@@ -1,5 +1,5 @@
 #include "config.h"
-#include "HassioMqttHandler.h"
+#include <HassioMqttClient.h>
 #include <ESP8266WebServer.h>
 #include <EEPROM.h>
 #include <NTPClient.h>
@@ -100,9 +100,11 @@ float scale_calibration = 466300.0;
 int scale_zero = -288;
 int scale_error_range = 1;
 
-HassioMqttConnectionManager hassioManager(
+HassioMqttContractBuilder hassioManager(
   HW_VERSION, VERSION, AUTHOR, DEVICE_ID, DEVICE_NAME
 );
+
+HassioMqttClient hassioClient(hassioManager);
 
 String twoDigit(int val) {
   String out = "";
@@ -119,18 +121,20 @@ int getWeight() {
 }
 
 void publishStatus() {
-  hassioManager.publishStatus(
-    getWeight(),
-    amount,
-    isRunning,
-    isWeightBased,
-    isClogged,
-    flow,
-    scale_zero,
-    clog_tolerance,
-    pullbackSteps/degreeSteps,
-    lastDosis,
-    speed
+  hassioClient.publishMessage(
+    hassioManager.getStatusMessage(
+      getWeight(),
+      amount,
+      isRunning,
+      isWeightBased,
+      isClogged,
+      flow,
+      scale_zero,
+      clog_tolerance,
+      pullbackSteps/degreeSteps,
+      lastDosis,
+      speed
+    )
   );
 }
 
@@ -471,7 +475,7 @@ void handle_OnConfig() { //Handler for the body path
 }
 
 void setupMqtt() {
-  hassioManager.setup(MQTT_HOST, MQTT_PORT, MQTT_USER, MQTT_PASS, mqttCallback);
+  hassioClient.setup(MQTT_HOST, MQTT_PORT, MQTT_USER, MQTT_PASS, mqttCallback);
   publishStatus();
 }
 
@@ -630,7 +634,7 @@ void loop() {
         runningWeight = getWeight();
         dosis = startingWeight-runningWeight;
         publishStatus();
-        hassioManager.loop();
+        hassioClient.loop();
       }
       
       if (isFeedingEnd()) {
@@ -642,9 +646,9 @@ void loop() {
     }
   } else {
     digitalWrite(STEPPER_ENABLE_PIN, STEPPER_DISABLED);
-    hassioManager.loop();
+    hassioClient.loop();
     unsigned long exTime = millis();
-    if (exTime < hassioManager.lastMqttUpdateTime || exTime-hassioManager.lastMqttUpdateTime > MQTT_PERIODIC_UPDATE_INTERVAL) {
+    if (exTime < hassioClient.lastMqttUpdateTime || exTime-hassioClient.lastMqttUpdateTime > MQTT_PERIODIC_UPDATE_INTERVAL) {
       setupMqtt(); // Just to ensure no server restarts prevent the CF from working
     }
   }

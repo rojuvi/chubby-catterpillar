@@ -1,0 +1,1 @@
+{"name":"CF dosage","uniq_id":"cf_amount","stat_t":"home/cat_feeder/state","device":{"hw_version":1,"sw_version":2,"manufacturer":"testAuthor","identifiers":"testDeviceId","name":"testDevice"},"icon":"mdi:weight-gram","cmd_t":"home/cat_feeder/dosage","min":0,"max":500,"unit_of_meas":"g","mode":"box","val_tpl":"{{ value_json.dosage|default(0) }}"}
