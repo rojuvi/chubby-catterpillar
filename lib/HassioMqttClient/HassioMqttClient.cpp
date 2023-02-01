@@ -8,13 +8,19 @@ HassioMqttClient::HassioMqttClient(HassioMqttContractBuilder& contractBuilder) {
 }
 
 void HassioMqttClient::setup(const char * host, int port, const char * user, const char * pass, MQTT_CALLBACK_SIGNATURE) {
+    Serial.println("Setting up hassio");
     pubSubClient.setBufferSize(MQTT_MAX_PACKET_SIZE);
+    Serial.print("MQTT Port: ");
+    Serial.println(port, DEC);
+    Serial.println("MQTT Host: " + String(host));
     pubSubClient.setServer(host, port);
     pubSubClient.setCallback(callback);
+    Serial.print("Conecting MQTT");
     while (!pubSubClient.connected()) {
         Serial.print(".");
-
+        // yield();
         if (pubSubClient.connect(this->contractBuilder.mqttName, user, pass)) {
+            Serial.println("");
             Serial.println("Connected to MQTT");
             publishMessage(this->contractBuilder.getMQTTAmountDiscoveryPayload());
             publishMessage(this->contractBuilder.getMQTTWeightDiscoveryPayload());
@@ -47,7 +53,7 @@ void HassioMqttClient::loop() {
     pubSubClient.loop();
 }
 
-void HassioMqttClient::publishMessage(HassioMqttPayload* payload) {
-    pubSubClient.publish(payload->topic, payload->buffer, payload->messageSize);
+void HassioMqttClient::publishMessage(HassioMqttPayload payload) {
+    pubSubClient.publish(payload.topic, payload.buffer, payload.messageSize);
     this->lastMqttUpdateTime = millis();
 }

@@ -9,7 +9,7 @@
 
 // MQTT Constants
 #define MQTT_MAX_PACKET_SIZE 512
-#define MQTT_PERIODIC_UPDATE_INTERVAL 10000
+#define MQTT_PERIODIC_UPDATE_INTERVAL 1000
 
 class HassioMqttClient {
     private:
@@ -27,6 +27,6 @@ class HassioMqttClient {
         HassioMqttClient(HassioMqttContractBuilder& contractBuilder);
         void setup(const char * host, int port, const char * user, const char * pass, MQTT_CALLBACK_SIGNATURE);
         void loop();
-        void publishMessage(HassioMqttPayload* payload);
+        void publishMessage(HassioMqttPayload payload);
 };
 #endif
