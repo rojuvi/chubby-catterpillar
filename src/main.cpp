@@ -5,6 +5,7 @@
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <HX711.h>
+#include <map>
 
 // Stepper Constants
 #define STEPS 3200
@@ -44,6 +45,7 @@
 #define SCALE_DAT_PIN D3
 #define SCALE_CLK_PIN D4
 #define SCALE_CALIB_FACTOR 466300.0
+#define ACCURATE_WEIGHT_MEASURES 1
 
 
 // Wifi config
@@ -120,7 +122,24 @@ int getWeight() {
   // return 0;
 }
 
+int getAccurateWeight() {
+  int maxCount = 0;
+  int mode = 0;
+  std::map<int,int> measures;
+  for (int i=0;i<ACCURATE_WEIGHT_MEASURES;i++) {
+      int measure = getWeight();
+      measures[measure]++;
+      if (measures[measure] > maxCount) {
+        maxCount = measures[measure];
+        mode = measure;
+      }
+      yield();
+  }
+  return mode;
+}
+
 void publishStatus() {
+  Serial.println("Publishing status");
   hassioClient.publishMessage(
     hassioManager.getStatusMessage(
       getWeight(),
@@ -146,7 +165,7 @@ void endFeed() {
 
 void feed() {
   if (!isRunning) {
-    startingWeight = getWeight();
+    startingWeight = getAccurateWeight();
     runningWeight = startingWeight;
     dosis = 0;
     lastDosis = 0;
@@ -528,7 +547,11 @@ void setup() {
   Serial.print("IP: "); 
   Serial.println(WiFi.localIP());
 
-    // Set API handlers
+  // MQTT init
+  Serial.println("MQTT init");
+  setupMqtt();
+
+  // Set API handlers
   server.on("/", handle_OnConnect);
   server.on("/config", handle_OnConfig);
   server.on("/run", handle_OnRun);
@@ -543,16 +566,17 @@ void setup() {
   Serial.println(numberOfRevolutions);
 
   // Scale init
+  Serial.println("Scale init");
   scale.begin(SCALE_DAT_PIN, SCALE_CLK_PIN);
   scale.set_scale(SCALE_CALIB_FACTOR);
-  
-  // MQTT init
-  setupMqtt();
 
   // Time init
+  Serial.println("Time init");
   timeClient.begin();
   
+  Serial.println("checkTime");
   checkTime();
+  Serial.println("Setup END--");
 }
 
 void detectClogging() {
@@ -583,6 +607,15 @@ boolean isFeedingEnd() {
     return (float)stepsCount/STEPS >= numberOfRevolutions; 
   } else {
     return dosis >= amount;
+  }
+}
+
+boolean isReallyFeedingEnd() {
+  if (isWeightBased) {
+    dosis = getAccurateWeight(); 
+    return isFeedingEnd();
+  } else {
+    return true;
   }
 }
 
@@ -637,7 +670,7 @@ void loop() {
         hassioClient.loop();
       }
       
-      if (isFeedingEnd()) {
+      if (isFeedingEnd() && isReallyFeedingEnd()) {
         endFeed();
       }
       if (stepsCount%pullbackFrequency == 0) {
