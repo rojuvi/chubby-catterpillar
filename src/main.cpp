@@ -7,11 +7,13 @@
 #include <HX711.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
+#include <map>
 
 #define HW_VERSION 2.0
 #define VERSION 2.1
 #define AUTHOR "donkikote"
 #define DEVICE_ID "cat_feeder"
+#define DEVICE_NAME "Cat Feeder"
 
 // Stepper Constants
 #define STEPS 3200
@@ -51,11 +53,12 @@
 #define SCALE_DAT_PIN D3
 #define SCALE_CLK_PIN D4
 #define SCALE_CALIB_FACTOR 466300.0
+#define ACCURATE_WEIGHT_MEASURES 10
 
 
 // MQTT Constants
 #define MQTT_MAX_PACKET_SIZE 512
-#define MQTT_PERIODIC_UPDATE_INTERVAL 60000
+#define MQTT_PERIODIC_UPDATE_INTERVAL 2000
 
 
 // Wifi config
@@ -74,7 +77,7 @@ int hours = 0;
 int minutes = 0;
 boolean isRunning = false;
 int degreeSteps = STEPS/360;
-int stepsPerLoop = degreeSteps;
+int stepsPerLoop = 15*degreeSteps;
 int pullbackSteps = 20*degreeSteps;
 int pullbackFrequency = 90*degreeSteps;
 int speed = 10;
@@ -140,6 +143,22 @@ String twoDigit(int val) {
 int getWeight() {
   return (int)(scale.get_units()*1000)-scale_zero;
   // return 0;
+}
+
+int getAccurateWeight() {
+  int maxCount = 0;
+  int mode = 0;
+  std::map<int,int> measures;
+  for (int i=0;i<ACCURATE_WEIGHT_MEASURES;i++) {
+      int measure = getWeight();
+      measures[measure]++;
+      if (measures[measure] > maxCount) {
+        maxCount = measures[measure];
+        mode = measure;
+      }
+      delay(100);
+  }
+  return mode;
 }
 
 void sendMQTTDiscoveryMessage(String discoveryTopic, DynamicJsonDocument doc) {
@@ -291,11 +310,11 @@ void sendMQTTSpeedDiscoveryMessage() {
   sendMQTTDiscoveryMessage(discoveryTopic, doc);
 }
 
-void sendMqttStatus() {
+void sendMqttStatus(float weight) {
   DynamicJsonDocument doc(1024);
   char buffer[256];
 
-  doc["weight"] = getWeight();
+  doc["weight"] = weight;
   doc["dosage"] = amount;
   doc["running"] = isRunning;
   doc["weight_based"] = isWeightBased;
@@ -317,7 +336,34 @@ void sendMqttStatus() {
   lastMqttUpdateTime = millis();
 }
 
+void sendMqttStatus() {
+  sendMqttStatus(getAccurateWeight());
+}
+
+void doStep(int steps, bool clockwise) {
+  if (clockwise) {
+    digitalWrite(DIR_PIN, CLOCKWISE);
+  } else {
+    digitalWrite(DIR_PIN, COUNTER_CLOCKWISE);
+  }
+  for (int x = 0; x < steps * 1; x++) {
+      digitalWrite(STEP_PIN, HIGH);
+      delayMicroseconds(stepDelay);
+      digitalWrite(STEP_PIN, LOW);
+      delayMicroseconds(stepDelay);
+   }
+}
+
+void push(int steps) {
+  doStep(steps, false);
+}
+
+void pull(int steps) {
+  doStep(steps, true);
+}
+
 void endFeed() {
+  pull(pullbackSteps);
   Serial.println("Stop turning at steps: " + String(stepsCount));
   isRunning = false;
   sendMqttStatus();
@@ -325,7 +371,7 @@ void endFeed() {
 
 void feed() {
   if (!isRunning) {
-    startingWeight = getWeight();
+    startingWeight = getAccurateWeight();
     runningWeight = startingWeight;
     dosis = 0;
     lastDosis = 0;
@@ -441,7 +487,7 @@ void setupMqtt() {
   deviceInfo["sw_version"] = VERSION;
   deviceInfo["identifiers"] = DEVICE_ID;
   deviceInfo["manufacturer"] = AUTHOR;
-  deviceInfo["name"] = "Cat Feeder";
+  deviceInfo["name"] = DEVICE_NAME;
   while (!client.connected()) {
     Serial.print(".");
 
@@ -802,26 +848,13 @@ boolean isFeedingEnd() {
   }
 }
 
-void doStep(int steps, bool clockwise) {
-  if (clockwise) {
-    digitalWrite(DIR_PIN, CLOCKWISE);
+boolean isReallyFeedingEnd() {
+  if (!isWeightBased) {
+    return true;
   } else {
-    digitalWrite(DIR_PIN, COUNTER_CLOCKWISE);
+    dosis = startingWeight-getAccurateWeight();
+    return isFeedingEnd();
   }
-  for (int x = 0; x < steps * 1; x++) {
-      digitalWrite(STEP_PIN, HIGH);
-      delayMicroseconds(stepDelay);
-      digitalWrite(STEP_PIN, LOW);
-      delayMicroseconds(stepDelay);
-   }
-}
-
-void push(int steps) {
-  doStep(steps, false);
-}
-
-void pull(int steps) {
-  doStep(steps, true);
 }
 
 void loop() {
@@ -846,14 +879,17 @@ void loop() {
     } else {
       push(stepsPerLoop);
       stepsCount += stepsPerLoop;
+
       if (stepsCount % scaleFrequency == 0) {
+        runningWeight = getAccurateWeight();
+      } else {
         runningWeight = getWeight();
-        dosis = startingWeight-runningWeight;
-        sendMqttStatus();
-        client.loop();
       }
+      dosis = startingWeight-runningWeight;
+      sendMqttStatus(runningWeight);
+      client.loop();
       
-      if (isFeedingEnd()) {
+      if (isFeedingEnd() && isReallyFeedingEnd()) {
         endFeed();
       }
       if (stepsCount%pullbackFrequency == 0) {
