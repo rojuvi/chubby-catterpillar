@@ -58,8 +58,6 @@
 // MQTT Constants
 #define MQTT_MAX_PACKET_SIZE 512
 #define MQTT_PERIODIC_UPDATE_INTERVAL 2000
-#define MQTT_OFFLINE "offline"
-#define MQTT_ONLINE "online"
 
 
 // Wifi config
@@ -132,6 +130,8 @@ WiFiClient wifiClient;
 PubSubClient client(wifiClient);
 DynamicJsonDocument deviceInfo(1024);
 
+void setupMqtt(); // Forward declaration
+
 String twoDigit(int val) {
   String out = "";
   if(val < 10){
@@ -180,7 +180,7 @@ DynamicJsonDocument buildDiscoveryStub(String name, String id) {
   doc["uniq_id"] = id;
   doc["stat_t"] = stateTopic;
   doc["device"] = deviceInfo;
-  doc["availability_topic"] = availabilityTopic;
+  doc["avty_t"] = availabilityTopic;
   return doc;
 }
 
@@ -438,6 +438,12 @@ void storeSpeed(int val) {
   }
 }
 
+void handleHassStatusChange(String message) {
+  if (message == MQTT_ONLINE) {
+      setupMqtt();
+  }
+}
+
 void mqttCallback(char *topic, byte *payload, unsigned int length){
   Serial.print("Message arrived in topic: ");
   Serial.println(topic);
@@ -475,6 +481,8 @@ void mqttCallback(char *topic, byte *payload, unsigned int length){
   } else if (speedCmdTopic == topic) {
     storeSpeed(message.toInt());
     sendMqttStatus();
+  } else if (MQTT_HASS_STATUS_TOPIC == topic) {
+    handleHassStatusChange(message);
   } else {
     Serial.println("Invalid topic");
   }
@@ -518,6 +526,8 @@ void setupMqtt() {
       client.subscribe(clogToleranceCmdTopic.c_str());
       client.subscribe(pullbackDegreesCmdTopic.c_str());
       client.subscribe(speedCmdTopic.c_str());
+      
+      client.subscribe(MQTT_HASS_STATUS_TOPIC.c_str());
     } else {
       Serial.println("failed with state ");
       Serial.print(client.state());
@@ -907,7 +917,7 @@ void loop() {
     client.loop();
     unsigned long exTime = millis();
     if (exTime < lastMqttUpdateTime || exTime-lastMqttUpdateTime > MQTT_PERIODIC_UPDATE_INTERVAL) {
-      setupMqtt(); // Just to ensure any server restarts prevent the CF from working
+      sendMqttStatus();
     }
   }
 }
