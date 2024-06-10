@@ -76,8 +76,8 @@ int minutes = 0;
 boolean isRunning = false;
 int degreeSteps = STEPS/360;
 int stepsPerLoop = 15*degreeSteps;
-int pullbackSteps = 20*degreeSteps;
-int pullbackFrequency = 90*degreeSteps;
+int pullbackSteps = 90*degreeSteps;
+int pullbackFrequency = 180*degreeSteps;
 int speed = 10;
 int stepDelay = STEP_DEFAULT_DELAY;
 
@@ -92,7 +92,7 @@ int startingWeight = 0;
 int runningWeight = 0;
 int dosis = 0;
 int lastDosis = 0;
-int scaleFrequency = 32;
+int scaleFrequency = 90*degreeSteps;
 boolean isClogged = false;
 int clogDetectedTimes = 0;
 
@@ -333,7 +333,7 @@ void sendMqttStatus(float weight) {
   serializeJson(doc, message);
   // Serial.println(message);
 
-  bool published = client.publish(stateTopic.c_str(), buffer, n);
+  client.publish(stateTopic.c_str(), buffer, n);
   Serial.println("Done");
   lastMqttUpdateTime = millis();
 }
@@ -365,9 +365,10 @@ void pull(int steps) {
 }
 
 void endFeed() {
-  pull(pullbackSteps);
+  pull(pullbackSteps*2);
   Serial.println("Stop turning at steps: " + String(stepsCount));
   isRunning = false;
+  lastDosis = startingWeight-getAccurateWeight();
   sendMqttStatus();
 }
 
@@ -557,209 +558,6 @@ void checkTime() {
   
 }
 
-// String makeHTML(String body) {
-//   String ptr = "<!DOCTYPE html> <html>\n";
-//   ptr +="<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=no\">\n";
-//   ptr +="<title>Cat Feeder Server</title>\n";
-//   ptr +="<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}\n";
-//   ptr +="body{margin-top: 50px;} h1 {color: #444444;margin: 50px auto 30px;}\n";
-//   ptr +="p {font-size: 24px;color: #444444;margin-bottom: 10px;}\n";
-//   ptr +="</style>\n";
-//   ptr +="</head>\n";
-//   ptr +="<body>\n";
-//   ptr += body;
-//   ptr +="</body>\n";
-//   ptr +="</html>\n";
-//   return ptr;
-// }
-
-// String homePage() {
-//   String ptr ="<div id=\"webpage\">\n";
-//   ptr +="<h1>Cat Feeder Server</h1>\n"; 
-  
-//   ptr +="<div id=\"display\">\n";
-//   ptr +="<h2>Server time - " + twoDigit(hours) + ":" + twoDigit(minutes) + "</h2>\n";
-//   ptr +="<h2>Schedule start - " + twoDigit(feedStartHour) + ":" + twoDigit(feedStartMinutes) + "</h2>\n";
-//   ptr +="<h2>Last run - " + twoDigit(lastHourRun) + ":" + twoDigit(lastMinutesRun) + "</h2>\n";
-//   ptr +="<h2>Frequency: " + String(hoursFrequency) + "h</h2>\n";
-//   ptr +="<h2>Flow: " + String(flow) + "g/rev</h2>\n";
-//   ptr +="<h2>Amount: " + String(amount) + "g</h2>\n";
-//   ptr +="<h2>Number of revolutions: " + String(numberOfRevolutions) + "</h2>\n";
-//   ptr +="<h2>Scale zero: " + String(scale_zero) + "g</h2>\n";
-//   ptr +="<h2>Scale Error: +-" + String(scale_error_range) + "g</h2>\n";
-//   ptr +="<h2>Clog tolerance: " + String(clog_tolerance) + " times</h2>\n";
-//   ptr +="<h2>Pullback Degrees: " + String(pullbackSteps/degreeSteps) + "deg</h2>\n";
-//   ptr +="<h2>Pullback Steps: " + String(pullbackSteps) + " steps</h2>\n";
-//   ptr +="<h2>Starting food: " + String(startingWeight) + "g</h2>\n";
-//   ptr +="<h2>Running food: " + String(runningWeight) + "g</h2>\n";
-//   ptr +="<h2>Remaining food: " + String(getWeight()) + "g</h2>\n";
-//   ptr +="<h2>Dosis: " + String(dosis) + "g</h2>\n";
-//   ptr +="<h2>Weight based: ";
-//   if (isWeightBased) {
-//     ptr +="<span>True</span>";
-//   } else {
-//     ptr +="<span>False</span>";
-//   }
-//   ptr +="</h2>\n";
-//   ptr +="<h2>Running: ";
-//   if (isRunning) {
-//     ptr +="<span>True</span>";
-//   } else {
-//     ptr +="<span>False</span>";
-//   }
-//   ptr +="</h2>\n";
-//   ptr +="<h2>Clogged: ";
-//   if (isClogged) {
-//     ptr +="<span>True</span>";
-//   } else {
-//     ptr +="<span>False</span>";
-//   }
-//   ptr +="</h2>\n";
-//   ptr +="</div>\n";
-  
-//   ptr +="<div id=\"config\">\n";
-//   ptr +="<form action=\"/config\">\n";
-//   ptr +="<label for=\"frequency\">Frequency (h)(0 to disable):</label>\n";
-//   ptr +="<input type=\"number\" min=\"0\" max=\"24\" step=\"1\" name=\"frequency\" value=\"" + String(hoursFrequency) + "\">\n";
-//   ptr +="<label for=\"amount\">Flow (g/rev):</label>\n";
-//   ptr +="<input type=\"number\" min=\"0\" step=\"1\" name=\"flow\" value=\"" + String(flow) + "\">\n";
-//   ptr +="<label for=\"amount\">Anount (g):</label>\n";
-//   ptr +="<input type=\"number\" min=\"0\" step=\"1\" name=\"amount\" value=\"" + String(amount) + "\">\n";
-//   ptr +="<br />\n";
-//   ptr +="<label for=\"hour\">Hour:</label>\n";
-//   ptr +="<input type=\"number\" min=\"0\" max=\"23\" step=\"1\" name=\"hour\" value=\"" + String(feedStartHour) + "\">\n";
-//   ptr +="<label for=\"minutes\">Minutes:</label>\n";
-//   ptr +="<input type=\"number\" min=\"0\" max=\"59\" step=\"1\" name=\"minutes\" value=\"" + String(feedStartMinutes) + "\">\n";
-//   ptr +="<br />\n";
-//   ptr +="<label for=\"scale_zero\">Scale Zero(g):</label>\n";
-//   ptr +="<input type=\"number\" step=\"1\" name=\"scale_zero\" value=\"" + String(scale_zero) + "\">\n";
-//   ptr +="<label for=\"scale_error_range\">Scale Error(g):</label>\n";
-//   ptr +="<input type=\"number\"  min=\"0\" step=\"1\" name=\"scale_error_range\" value=\"" + String(scale_error_range) + "\">\n";
-//   ptr +="<br />\n";
-//   ptr +="<label for=\"clog_tolerance\">Clog tolerance:</label>\n";
-//   ptr +="<input type=\"number\" min=\"1\"step=\"1\" name=\"clog_tolerance\" value=\"" + String(clog_tolerance) + "\">\n";
-//   ptr +="<label for=\"pullbackDegrees\">Pullback Degrees:</label>\n";
-//   ptr +="<input type=\"number\" min=\"1\"step=\"1\" name=\"pullbackDegrees\" value=\"" + String(pullbackSteps/degreeSteps) + "\">\n";
-//   ptr +="<label for=\"isWeightBased\">Weight based </label>\n";
-//   ptr +="<input type=\"checkbox\" name=\"isWeightBased\" ";
-//   if (isWeightBased) {
-//     ptr +="checked";
-//   }
-//   ptr += "/>\n";
-//   ptr +="<br />\n";
-//   ptr +="<button type=\"submit\">Update config</button>\n";
-//   ptr +="</form>\n";
-//   ptr +="</div>\n";
-
-//   ptr += "<a href=\"/run\">Run</a>";
-  
-//   ptr +="</div>\n";
-//   return makeHTML(ptr);
-// }
-
-// void handle_OnConnect() {
-//   Serial.println("Connection in");
-//   server.send(200, "text/html", homePage());
-// }
-
-// void handle_OnRun() {
-//   feed();
-//   server.sendHeader("Location", "/",true);
-//   server.send(302, "text/plane","");
-// }
-
-// void handle_NotFound()
-// {
-//      server.send(404, "text/plain", "Ni idea de a dónde quieres ir pringao");
-// }
-
-// void handle_OnConfig() { //Handler for the body path
-//       if (!server.hasArg("frequency") && !server.hasArg("amount") 
-//           && !server.hasArg("hour") && !server.hasArg("minutes")){ //Check if body received
- 
-//             server.send(200, "text/plain", "Body not received");
-//             return;
- 
-//       }
-//       EEPROM.begin(EEPROM_SIZE);
-  
-//       if(server.hasArg("frequency")) {
-//         int freq = server.arg("frequency").toInt();
-//         if (freq != hoursFrequency) {
-//           hoursFrequency = freq;
-//           EEPROM.put(FREQ_HOURS_ADDR, hoursFrequency);
-//         }
-//       }
-//       if(server.hasArg("amount")) {
-//         int amt = server.arg("amount").toInt();
-//         storeAmount(amt);
-//       }
-//       if(server.hasArg("flow")) {
-//         storeFlow(server.arg("flow").toInt());
-//       }
-//       float nor = (float)amount/flow;
-//       if (nor != numberOfRevolutions) {
-//         numberOfRevolutions = nor;
-//         EEPROM.put(REVS_ADDR, numberOfRevolutions);
-//       }
-//       if(server.hasArg("hour")) {
-//         int tmp = server.arg("hour").toInt();
-//         if (tmp != feedStartHour) {
-//           feedStartHour = tmp;
-//           EEPROM.put(FEED_START_HOUR_ADDR, feedStartHour);
-//         }
-//       }
-//       if(server.hasArg("minutes")) {
-//         int tmp = server.arg("minutes").toInt();
-//         if (tmp != feedStartMinutes) {
-//           feedStartMinutes = tmp;
-//           EEPROM.put(FEED_START_MIN_ADDR, feedStartMinutes);
-//         }
-//       }
-//       if(server.hasArg("scale_zero")) {
-//         storeScaleZero(server.arg("scale_zero").toInt());
-//       }
-//       if(server.hasArg("scale_error_range")) {
-//         int tmp = server.arg("scale_error_range").toInt();
-//         if (tmp != scale_error_range) {
-//           scale_error_range = tmp;
-//           EEPROM.put(SCALE_ERROR_RANGE_ADDR, scale_error_range);
-//         }
-//       }
-//       if(server.hasArg("clog_tolerance")) {
-//         storeClogTolerance(server.arg("clog_tolerance").toInt());
-//       }
-//       if(server.hasArg("pullbackDegrees")) {
-//         int tmp = server.arg("pullbackDegrees").toInt()*degreeSteps;
-//         if (tmp != pullbackSteps) {
-//           pullbackSteps = tmp;
-//           EEPROM.put(PULLBACK_STEPS_ADDR, pullbackSteps);
-//         }
-//       }
-//       storeWeightBased(server.hasArg("isWeightBased"));
-//       EEPROM.end();
- 
-//       String message = "<div>Body received:\n";
-//              message += "Frequency: " + server.arg("frequency") + "\n";
-//              message += "Amount: " + server.arg("amount") + "\n";
-//              message += "Flow: " + server.arg("flow") + "\n";
-//              message += "Hour: " + server.arg("hour") + "\n";
-//              message += "Min: " + server.arg("minutes") + "\n";
-//              message += "Scale zero: " + server.arg("scale_zeroutes") + "\n";
-//              message += "scale_error_range: " + server.arg("scale_error_range") + "\n";
-//              message += "clog_tolerance: " + server.arg("clog_tolerance") + "\n";
-//              message += "pullbackSteps: " + server.arg("pullbackSteps") + "\n";
-//              message += "isWeightBased: " + server.arg("isWeightBased") + "\n</div>";
-//              message += "\n";
-//              message += "<a href=\"/\">Go back</a>\n";
-
-//       server.sendHeader("Location", "/",true);
-//       server.send(302, "text/plane","");
-// //      server.send(200, "text/html", makeHTML(message));
-//       Serial.println(message);
-//       sendMqttStatus();
-// }
-
 void setup() {
   // Set stepper motor
   pinMode(DIR_PIN, OUTPUT);
@@ -794,7 +592,7 @@ void setup() {
   stepDelay = STEP_DEFAULT_DELAY/speed*10;
 
   // Init wifi server
-  Serial.println("Conectando ");
+  Serial.println("Connecting");
   Serial.println(WIFI_SSID);
   WiFi.mode(WIFI_STA);
   WiFi.config(ip, gateway, subnet, dns1, dns2);
@@ -808,15 +606,6 @@ void setup() {
   Serial.println("WiFi connected..!");
   Serial.print("IP: "); 
   Serial.println(WiFi.localIP());
-
-    // Set API handlers
-  // server.on("/", handle_OnConnect);
-  // server.on("/config", handle_OnConfig);
-  // server.on("/run", handle_OnRun);
-  // server.onNotFound(handle_NotFound);
-
-  // server.begin();
-  // Serial.println("HTTP server started");
 
   Serial.print("Frequency: ");
   Serial.println(hoursFrequency);
