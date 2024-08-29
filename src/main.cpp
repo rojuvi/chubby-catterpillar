@@ -58,6 +58,7 @@
 // MQTT Constants
 #define MQTT_MAX_PACKET_SIZE 512
 #define MQTT_PERIODIC_UPDATE_INTERVAL 2000
+#define MQTT_DISCOVERY_REMINDER_FREQUENCY 600000 // 10 min
 
 
 // Wifi config
@@ -126,6 +127,7 @@ const String clogToleranceCmdTopic = "home/cat_feeder/clog_tolerance";
 const String pullbackDegreesCmdTopic = "home/cat_feeder/pullback_degrees";
 const String speedCmdTopic = "home/cat_feeder/speed";
 unsigned long lastMqttUpdateTime = 0;
+unsigned long lastMqttDiscovery = 0;
 WiFiClient wifiClient;
 PubSubClient client(wifiClient);
 DynamicJsonDocument deviceInfo(1024);
@@ -539,6 +541,7 @@ void setupMqtt() {
   Serial.println("Connected to MQTT");
   setOnline();
   sendMqttStatus();
+  lastMqttUpdateTime = millis();
 }
 
 void checkTime() {
@@ -707,6 +710,9 @@ void loop() {
     unsigned long exTime = millis();
     if (exTime < lastMqttUpdateTime || exTime-lastMqttUpdateTime > MQTT_PERIODIC_UPDATE_INTERVAL) {
       sendMqttStatus();
+    }
+    if (exTime < lastMqttDiscovery || exTime-lastMqttDiscovery > MQTT_DISCOVERY_REMINDER_FREQUENCY) {
+      setupMqtt();
     }
   }
 }
