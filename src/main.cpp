@@ -58,7 +58,7 @@
 // MQTT Constants
 #define MQTT_MAX_PACKET_SIZE 512
 #define MQTT_PERIODIC_UPDATE_INTERVAL 2000
-#define MQTT_DISCOVERY_REMINDER_FREQUENCY 600000 // 10 min
+#define MQTT_DISCOVERY_REMINDER_FREQUENCY 60000 // 1 min
 
 
 // Wifi config
@@ -336,7 +336,7 @@ void sendMqttStatus(float weight) {
   // Serial.println(message);
 
   client.publish(stateTopic.c_str(), buffer, n);
-  Serial.println("Done");
+  Serial.println("Mqtt Status Sent");
   lastMqttUpdateTime = millis();
 }
 
@@ -498,6 +498,7 @@ bool setOnline() {
 
 void setupMqtt() {
   Serial.print("Setting up mqtt.");
+  lastMqttDiscovery = millis();
   client.setBufferSize(MQTT_MAX_PACKET_SIZE);
   client.setServer(MQTT_HOST, MQTT_PORT);
   client.setCallback(mqttCallback);
