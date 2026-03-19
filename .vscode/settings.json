@@ -1,12 +1,3 @@
 {
-  "files.associations": {
-    "system_error": "cpp"
-  },
-  "cSpell.words": [
-    "avty",
-    "CALIB",
-    "donkikote",
-    "homeassistant"
-  ],
   "C_Cpp_Runner.msvcBatchPath": ""
 }

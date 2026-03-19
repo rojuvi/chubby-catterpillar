@@ -58,7 +58,16 @@
 // MQTT Constants
 #define MQTT_MAX_PACKET_SIZE 512
 #define MQTT_PERIODIC_UPDATE_INTERVAL 2000
+<<<<<<< Updated upstream
 #define MQTT_DISCOVERY_REMINDER_FREQUENCY 60000 // 1 min
+=======
+#define MQTT_DISCOVERY_REMINDER_FREQUENCY 30000 // 30s
+
+// LOGGING
+#define LOG_MAX_STRING_SIZE 2000
+#define LOG_BUFFER_FULL_MESSAGE String("Log Buffer Full")
+#define LOG_CLEANUP_SIZE 500
+>>>>>>> Stashed changes
 
 
 // Wifi config
@@ -126,6 +135,7 @@ const String scaleZeroCmdTopic = "home/cat_feeder/scale_zero";
 const String clogToleranceCmdTopic = "home/cat_feeder/clog_tolerance";
 const String pullbackDegreesCmdTopic = "home/cat_feeder/pullback_degrees";
 const String speedCmdTopic = "home/cat_feeder/speed";
+
 unsigned long lastMqttUpdateTime = 0;
 unsigned long lastMqttDiscovery = 0;
 WiFiClient wifiClient;
@@ -133,6 +143,10 @@ PubSubClient client(wifiClient);
 DynamicJsonDocument deviceInfo(1024);
 
 void setupMqtt(); // Forward declaration
+
+void log(String text) {
+  Serial.println(text);
+}
 
 String twoDigit(int val) {
   String out = "";
@@ -171,8 +185,6 @@ void sendMQTTDiscoveryMessage(String discoveryTopic, DynamicJsonDocument doc) {
   for (int i = 0; i < n; i++) {
       message = message + buffer[i];  // convert *byte to string
   }
-  // Serial.print("Sending discovery: ");
-  // Serial.println(message);
   client.publish(discoveryTopic.c_str(), buffer, n);
 }
 
@@ -314,7 +326,7 @@ void sendMQTTSpeedDiscoveryMessage() {
   sendMQTTDiscoveryMessage(discoveryTopic, doc);
 }
 
-void sendMqttStatus(float weight) {
+boolean sendMqttStatus(float weight) {
   DynamicJsonDocument doc(1024);
   char buffer[256];
 
@@ -333,15 +345,25 @@ void sendMqttStatus(float weight) {
   size_t n = serializeJson(doc, buffer);
   String message;
   serializeJson(doc, message);
-  // Serial.println(message);
 
+<<<<<<< Updated upstream
   client.publish(stateTopic.c_str(), buffer, n);
   Serial.println("Mqtt Status Sent");
+=======
+  boolean sent = client.publish(stateTopic.c_str(), buffer, n);
+  if (sent) {
+    log("Done sending mqtt status");
+  } else {
+    log("Failed to send mqtt status!!");
+  }
+
+>>>>>>> Stashed changes
   lastMqttUpdateTime = millis();
+  return sent;
 }
 
-void sendMqttStatus() {
-  sendMqttStatus(getAccurateWeight());
+boolean sendMqttStatus() {
+  return sendMqttStatus(getAccurateWeight());
 }
 
 void doStep(int steps, bool clockwise) {
@@ -368,14 +390,16 @@ void pull(int steps) {
 
 void endFeed() {
   pull(pullbackSteps*2);
-  Serial.println("Stop turning at steps: " + String(stepsCount));
+  log("Stop turning at steps: " + String(stepsCount));
   isRunning = false;
   lastDosis = startingWeight-getAccurateWeight();
   sendMqttStatus();
 }
 
 void feed() {
+  log("Requested feed");
   if (!isRunning) {
+    log("Starting feed");
     startingWeight = getAccurateWeight();
     runningWeight = startingWeight;
     dosis = 0;
@@ -388,6 +412,7 @@ void feed() {
     clogDetectedTimes = 0;
     sendMqttStatus();
   }
+  log("Feed done");
 }
 
 void storeAmount(int val) {
@@ -448,14 +473,12 @@ void handleHassStatusChange(String message) {
 }
 
 void mqttCallback(char *topic, byte *payload, unsigned int length){
-  Serial.print("Message arrived in topic: ");
-  Serial.println(topic);
-  Serial.print("Message:");
+  log("Message arrived in topic: " + String(topic));
   String message;
   for (int i = 0; i < length; i++) {
       message = message + (char) payload[i];  // convert *byte to string
   }
-  Serial.println(message);
+  log("Message: "+ message);
   EEPROM.begin(EEPROM_SIZE);
   if (runningCmdTopic == topic) {
     if (message == "True") {
@@ -487,7 +510,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length){
   } else if (MQTT_HASS_STATUS_TOPIC == topic) {
     handleHassStatusChange(message);
   } else {
-    Serial.println("Invalid topic");
+    log("Invalid topic: " + String(topic));
   }
   EEPROM.end();
 }
@@ -497,8 +520,12 @@ bool setOnline() {
 }
 
 void setupMqtt() {
+<<<<<<< Updated upstream
   Serial.print("Setting up mqtt.");
   lastMqttDiscovery = millis();
+=======
+  log("Setting up mqtt");
+>>>>>>> Stashed changes
   client.setBufferSize(MQTT_MAX_PACKET_SIZE);
   client.setServer(MQTT_HOST, MQTT_PORT);
   client.setCallback(mqttCallback);
@@ -510,7 +537,7 @@ void setupMqtt() {
   while (!client.connected()) {
     Serial.print(".");
 
-    if (client.connect(mqttName.c_str(), MQTT_USER, MQTT_PASS, availabilityTopic.c_str(), 0, true, MQTT_OFFLINE)) {
+    if (client.connect(mqttName.c_str(), MQTT_USER, MQTT_PASS, availabilityTopic.c_str(), 1, true, MQTT_OFFLINE)) {
       sendMQTTAmountDiscoveryMessage();
       sendMQTTWeightDiscoveryMessage();
       sendMQTTRunningDiscoveryMessage();
@@ -533,32 +560,33 @@ void setupMqtt() {
       
       client.subscribe(MQTT_HASS_STATUS_TOPIC.c_str());
     } else {
-      Serial.println("failed with state ");
-      Serial.print(client.state());
+      log("failed with state " + String(client.state()));
       delay(2000);
     }
   }
   Serial.println("");
-  Serial.println("Connected to MQTT");
+  log("Connected to MQTT");
   setOnline();
   sendMqttStatus();
-  lastMqttUpdateTime = millis();
+  lastMqttDiscovery = millis();
 }
 
 void checkTime() {
-  timeClient.update();
+  // Serial.println("Updating time...");
+  // timeClient.update();
 
-  hours = timeClient.getHours();
-  minutes = timeClient.getMinutes();
-  Serial.print(daysOfTheWeek[timeClient.getDay()]);
-  Serial.print(", ");
-  Serial.print(twoDigit(hours));
-  Serial.print(":");
-  Serial.println(twoDigit(minutes));
+  // hours = timeClient.getHours();
+  // minutes = timeClient.getMinutes();
+  // Serial.print(daysOfTheWeek[timeClient.getDay()]);
+  // Serial.print(", ");
+  // Serial.print(twoDigit(hours));
+  // Serial.print(":");
+  // Serial.println(twoDigit(minutes));
+  // Serial.println("Done updating time");
 
-  if (!isRunning && hoursFrequency > 0 && hours != lastHourRun && minutes >= feedStartMinutes && (hours-feedStartHour)%hoursFrequency==0) {
-    feed();
-  }
+  // if (!isRunning && hoursFrequency > 0 && hours != lastHourRun && minutes >= feedStartMinutes && (hours-feedStartHour)%hoursFrequency==0) {
+  //   feed();
+  // }
   
 }
 
@@ -596,8 +624,7 @@ void setup() {
   stepDelay = STEP_DEFAULT_DELAY/speed*10;
 
   // Init wifi server
-  Serial.println("Connecting");
-  Serial.println(WIFI_SSID);
+  log("Connecting wifi " + String(WIFI_SSID));
   WiFi.mode(WIFI_STA);
   WiFi.config(ip, gateway, subnet, dns1, dns2);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -607,14 +634,11 @@ void setup() {
     Serial.print(".");
   }
   Serial.println("");
-  Serial.println("WiFi connected..!");
-  Serial.print("IP: "); 
-  Serial.println(WiFi.localIP());
+  log("WiFi connected..!");
+  log("IP: " + WiFi.localIP().toString());
 
-  Serial.print("Frequency: ");
-  Serial.println(hoursFrequency);
-  Serial.print("Revolutions: ");
-  Serial.println(numberOfRevolutions);
+  log("Frequency: " + String(hoursFrequency));
+  log("Revolutions: " + String(numberOfRevolutions));
 
   // Scale init
   scale.begin(SCALE_DAT_PIN, SCALE_CLK_PIN);
@@ -624,18 +648,15 @@ void setup() {
   setupMqtt();
 
   // Time init
-  timeClient.begin();
+  // timeClient.begin();
   
-  checkTime();
+  // checkTime();
 }
 
 void detectClogging() {
   // same or lower value X number of times
   if (isWeightBased) {
-    Serial.print("Dosis/LastDosis: ");
-    Serial.print(dosis);
-    Serial.print("/");
-    Serial.println(lastDosis);
+    log("Dosis/LastDosis: " + String(dosis) + "/" + String(lastDosis));
     if (abs(dosis-lastDosis)<=scale_error_range) {
       clogDetectedTimes++;
       if (clogDetectedTimes >= clog_tolerance) {
@@ -670,21 +691,24 @@ boolean isReallyFeedingEnd() {
 
 void loop() {
   unsigned long currentMillis = millis();
-  if (currentMillis-lastMillis >= TIME_UPDATE_INTERVAL) {
-    lastMillis = currentMillis;
-    checkTime();
+  // if (currentMillis-lastMillis >= TIME_UPDATE_INTERVAL) {
+  //   lastMillis = currentMillis;
+  //   checkTime();
+  // }
+  if (!client.connected()) {
+    log("Detected client disconnected.");
+    setupMqtt();
   }
   
   if (isRunning) {
     digitalWrite(STEPPER_ENABLE_PIN, STEPPER_ENABLED);
     if (isPullBack) {
-      Serial.print("Start pullback");
-      Serial.println(pullbackSteps);
+      log("Start pullback: " + String(pullbackSteps));
       pull(pullbackSteps);
       push(pullbackSteps);
       isPullBack = false;
       detectClogging();
-      Serial.println("End pullback");
+      log("End pullback");
     } else {
       push(stepsPerLoop);
       stepsCount += stepsPerLoop;
@@ -696,7 +720,6 @@ void loop() {
       }
       dosis = startingWeight-runningWeight;
       sendMqttStatus(runningWeight);
-      client.loop();
       
       if (isFeedingEnd() && isReallyFeedingEnd()) {
         endFeed();
@@ -707,7 +730,6 @@ void loop() {
     }
   } else {
     digitalWrite(STEPPER_ENABLE_PIN, STEPPER_DISABLED);
-    client.loop();
     unsigned long exTime = millis();
     if (exTime < lastMqttUpdateTime || exTime-lastMqttUpdateTime > MQTT_PERIODIC_UPDATE_INTERVAL) {
       sendMqttStatus();
@@ -716,4 +738,5 @@ void loop() {
       setupMqtt();
     }
   }
+  client.loop();
 }
