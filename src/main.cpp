@@ -58,19 +58,16 @@
 // MQTT Constants
 #define MQTT_MAX_PACKET_SIZE 512
 #define MQTT_PERIODIC_UPDATE_INTERVAL 2000
-<<<<<<< Updated upstream
-#define MQTT_DISCOVERY_REMINDER_FREQUENCY 60000 // 1 min
-=======
 #define MQTT_DISCOVERY_REMINDER_FREQUENCY 30000 // 30s
 
 // LOGGING
 #define LOG_MAX_STRING_SIZE 2000
 #define LOG_BUFFER_FULL_MESSAGE String("Log Buffer Full")
 #define LOG_CLEANUP_SIZE 500
->>>>>>> Stashed changes
 
 
 // Wifi config
+#define WIFI_CONNECT_TIMEOUT 30000
 IPAddress ip(192,168,1,142);     
 IPAddress gateway(192,168,1,1);   
 IPAddress subnet(255,255,255,0);
@@ -346,18 +343,12 @@ boolean sendMqttStatus(float weight) {
   String message;
   serializeJson(doc, message);
 
-<<<<<<< Updated upstream
-  client.publish(stateTopic.c_str(), buffer, n);
-  Serial.println("Mqtt Status Sent");
-=======
   boolean sent = client.publish(stateTopic.c_str(), buffer, n);
   if (sent) {
-    log("Done sending mqtt status");
+    log("Mqtt Status Sent");
   } else {
     log("Failed to send mqtt status!!");
   }
-
->>>>>>> Stashed changes
   lastMqttUpdateTime = millis();
   return sent;
 }
@@ -520,12 +511,8 @@ bool setOnline() {
 }
 
 void setupMqtt() {
-<<<<<<< Updated upstream
-  Serial.print("Setting up mqtt.");
-  lastMqttDiscovery = millis();
-=======
   log("Setting up mqtt");
->>>>>>> Stashed changes
+  lastMqttDiscovery = millis();
   client.setBufferSize(MQTT_MAX_PACKET_SIZE);
   client.setServer(MQTT_HOST, MQTT_PORT);
   client.setCallback(mqttCallback);
@@ -590,6 +577,28 @@ void checkTime() {
   
 }
 
+void wifiConnect() {
+  log("Connecting wifi " + String(WIFI_SSID));
+  unsigned long start = millis();
+  WiFi.mode(WIFI_STA);
+  WiFi.config(ip, gateway, subnet, dns1, dns2);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED || millis()-start > WIFI_CONNECT_TIMEOUT)
+  {  
+    delay(1000);
+    Serial.print(".");
+  }
+  Serial.println("");
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFi.setAutoReconnect(true);
+    WiFi.persistent(true);
+    log("WiFi connected..!");
+    log("IP: " + WiFi.localIP().toString());
+  } else {
+    log("Failed to connect to wifi " + String(WIFI_SSID));
+  }
+}
+
 void setup() {
   // Set stepper motor
   pinMode(DIR_PIN, OUTPUT);
@@ -624,21 +633,7 @@ void setup() {
   stepDelay = STEP_DEFAULT_DELAY/speed*10;
 
   // Init wifi server
-  log("Connecting wifi " + String(WIFI_SSID));
-  WiFi.mode(WIFI_STA);
-  WiFi.config(ip, gateway, subnet, dns1, dns2);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  while (WiFi.status() != WL_CONNECTED)
-  {  
-    delay(1000);
-    Serial.print(".");
-  }
-  Serial.println("");
-  log("WiFi connected..!");
-  log("IP: " + WiFi.localIP().toString());
-
-  log("Frequency: " + String(hoursFrequency));
-  log("Revolutions: " + String(numberOfRevolutions));
+  wifiConnect();
 
   // Scale init
   scale.begin(SCALE_DAT_PIN, SCALE_CLK_PIN);
