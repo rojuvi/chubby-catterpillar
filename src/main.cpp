@@ -139,10 +139,17 @@ WiFiClient wifiClient;
 PubSubClient client(wifiClient);
 DynamicJsonDocument deviceInfo(1024);
 
+String error = "";
+
 void setupMqtt(); // Forward declaration
 
 void log(String text) {
   Serial.println(text);
+}
+
+void err(String text) {
+  log("[ERROR] - " + text);
+  error = text;
 }
 
 String twoDigit(int val) {
@@ -323,6 +330,15 @@ void sendMQTTSpeedDiscoveryMessage() {
   sendMQTTDiscoveryMessage(discoveryTopic, doc);
 }
 
+void sendMQTTErrorDiscoveryMessage() {
+  String discoveryTopic = "homeassistant/sensor/cat_feeder/error/config";
+  DynamicJsonDocument doc = buildDiscoveryStub("CF error msg", "cf_error");
+  doc["icon"] = "mdi:alert-circle";
+  doc["frc_upd"] = false;
+  doc["val_tpl"] = "{{ value_json.error|default("") }}";
+  sendMQTTDiscoveryMessage(discoveryTopic, doc);
+}
+
 boolean sendMqttStatus(float weight) {
   DynamicJsonDocument doc(1024);
   char buffer[256];
@@ -338,6 +354,7 @@ boolean sendMqttStatus(float weight) {
   doc["pullback_degrees"] = pullbackSteps/degreeSteps;
   doc["last_dosis"] = lastDosis;
   doc["speed"] = speed;
+  doc["error"] = error;
 
   size_t n = serializeJson(doc, buffer);
   String message;
@@ -536,6 +553,7 @@ void setupMqtt() {
       sendMQTTPullbackDegreesDiscoveryMessage();
       sendMQTTLastDosisDiscoveryMessage();
       sendMQTTSpeedDiscoveryMessage();
+      sendMQTTErrorDiscoveryMessage();
       client.subscribe(dosageCmdTopic.c_str());
       client.subscribe(runningCmdTopic.c_str());
       client.subscribe(weightBasedCmdTopic.c_str());
@@ -685,13 +703,19 @@ boolean isReallyFeedingEnd() {
 }
 
 void loop() {
-  unsigned long currentMillis = millis();
+  // unsigned long currentMillis = millis();
   // if (currentMillis-lastMillis >= TIME_UPDATE_INTERVAL) {
   //   lastMillis = currentMillis;
   //   checkTime();
   // }
+  if (!WiFi.status() == WL_CONNECTED) {
+    err("Wifi disconnected with status: " + WiFi.status());
+  }
   if (!client.connected()) {
     log("Detected client disconnected.");
+    if (error == "") {
+      err("MQTT Client disconnected");
+    }
     setupMqtt();
   }
   
