@@ -59,6 +59,7 @@
 #define MQTT_MAX_PACKET_SIZE 512
 #define MQTT_PERIODIC_UPDATE_INTERVAL 2000
 #define MQTT_DISCOVERY_REMINDER_FREQUENCY 30000 // 30s
+#define MQTT_CONNECT_TIMEOUT 2000
 
 // LOGGING
 #define LOG_MAX_STRING_SIZE 2000
@@ -139,7 +140,7 @@ WiFiClient wifiClient;
 PubSubClient client(wifiClient);
 DynamicJsonDocument deviceInfo(1024);
 
-String error = "";
+String status = "";
 
 void setupMqtt(); // Forward declaration
 
@@ -147,9 +148,9 @@ void log(String text) {
   Serial.println(text);
 }
 
-void err(String text) {
-  log("[ERROR] - " + text);
-  error = text;
+void stat(String text) {
+  log(text);
+  status = text;
 }
 
 String twoDigit(int val) {
@@ -331,11 +332,10 @@ void sendMQTTSpeedDiscoveryMessage() {
 }
 
 void sendMQTTErrorDiscoveryMessage() {
-  String discoveryTopic = "homeassistant/sensor/cat_feeder/error/config";
-  DynamicJsonDocument doc = buildDiscoveryStub("CF error msg", "cf_error");
+  String discoveryTopic = "homeassistant/sensor/cat_feeder/status/config";
+  DynamicJsonDocument doc = buildDiscoveryStub("CF status msg", "cf_status");
   doc["icon"] = "mdi:alert-circle";
-  doc["frc_upd"] = false;
-  doc["val_tpl"] = "{{ value_json.error|default("") }}";
+  doc["val_tpl"] = "{{ value_json.status|default("") }}";
   sendMQTTDiscoveryMessage(discoveryTopic, doc);
 }
 
@@ -354,7 +354,7 @@ boolean sendMqttStatus(float weight) {
   doc["pullback_degrees"] = pullbackSteps/degreeSteps;
   doc["last_dosis"] = lastDosis;
   doc["speed"] = speed;
-  doc["error"] = error;
+  doc["status"] = status;
 
   size_t n = serializeJson(doc, buffer);
   String message;
@@ -538,7 +538,8 @@ void setupMqtt() {
   deviceInfo["identifiers"] = DEVICE_ID;
   deviceInfo["manufacturer"] = AUTHOR;
   deviceInfo["name"] = DEVICE_NAME;
-  while (!client.connected()) {
+  unsigned long start = millis();
+  while (!client.connected() && millis()-start < MQTT_CONNECT_TIMEOUT) {
     Serial.print(".");
 
     if (client.connect(mqttName.c_str(), MQTT_USER, MQTT_PASS, availabilityTopic.c_str(), 1, true, MQTT_OFFLINE)) {
@@ -565,15 +566,19 @@ void setupMqtt() {
       
       client.subscribe(MQTT_HASS_STATUS_TOPIC.c_str());
     } else {
-      log("failed with state " + String(client.state()));
+      log("Failed mqtt connect with state " + String(client.state()));
       delay(2000);
     }
   }
   Serial.println("");
-  log("Connected to MQTT");
-  setOnline();
-  sendMqttStatus();
-  lastMqttDiscovery = millis();
+  if (client.connected()) {
+    log("Connected to MQTT");
+    setOnline();
+    sendMqttStatus();
+    lastMqttDiscovery = millis();
+  } else {
+    stat("Failed mqtt connect with state " + String(client.state()));
+  }
 }
 
 void checkTime() {
@@ -618,6 +623,7 @@ void wifiConnect() {
 }
 
 void setup() {
+  status = "Setup";
   // Set stepper motor
   pinMode(DIR_PIN, OUTPUT);
   pinMode(STEP_PIN, OUTPUT);
@@ -709,12 +715,12 @@ void loop() {
   //   checkTime();
   // }
   if (!WiFi.status() == WL_CONNECTED) {
-    err("Wifi disconnected with status: " + WiFi.status());
+    stat("Wifi disconnected with status: " + WiFi.status());
   }
   if (!client.connected()) {
     log("Detected client disconnected.");
-    if (error == "") {
-      err("MQTT Client disconnected");
+    if (status == "") {
+      stat("MQTT Client disconnected");
     }
     setupMqtt();
   }
