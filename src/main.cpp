@@ -7,6 +7,7 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <map>
+#include <algorithm>
 
 #define HW_VERSION 2.0
 #define VERSION 2.1
@@ -53,6 +54,12 @@
 #define SCALE_CLK_PIN D4
 #define SCALE_CALIB_FACTOR 466300.0
 #define ACCURATE_WEIGHT_MEASURES 10
+#define ACCURATE_WEIGHT_MEASURE_DELAY 100
+#define ACCURATE_WEIGHT_MEASURE_FREQUENCY 1000
+#define ACCURATE_WEIGHT_MAX_RANGE 10
+#define ACCURATE_WEIGHT_MAX_RANGE_TRIM 1
+#define MISSING_STARTING_WEIGHT -99999
+#define ACCURATE_WEIGHT_MEASURE_TIMEOUT 5000
 
 
 // MQTT Constants
@@ -60,6 +67,7 @@
 #define MQTT_PERIODIC_UPDATE_INTERVAL 2000
 #define MQTT_DISCOVERY_REMINDER_FREQUENCY 30000 // 30s
 #define MQTT_CONNECT_TIMEOUT 2000
+#define MQTT_RECONNECT_FREQUENCY 5000
 
 // LOGGING
 #define LOG_MAX_STRING_SIZE 2000
@@ -74,6 +82,8 @@ IPAddress gateway(192,168,1,1);
 IPAddress subnet(255,255,255,0);
 IPAddress dns1(192,168,1,1);
 IPAddress dns2(1,1,1,1);
+
+unsigned long wifiLastConnectedAt = 0;
 
 int hoursFrequency = 6;
 int flow = AMT_PER_REV;
@@ -94,8 +104,12 @@ boolean isPullBack = false;
 
 int clog_tolerance = 3;
 
+unsigned long waitStart = 0;
+int waitAmount = 0;
+
 // Weight based dosage
 boolean isWeightBased = true;
+unsigned long feedStart = 0;
 int startingWeight = 0;
 int runningWeight = 0;
 int dosis = 0;
@@ -103,6 +117,11 @@ int lastDosis = 0;
 int scaleFrequency = 90*degreeSteps;
 boolean isClogged = false;
 int clogDetectedTimes = 0;
+int accurateWeightMeasuresCount = 0;
+int accurateWeightMeasures[ACCURATE_WEIGHT_MEASURES];
+int accurateWeight = 0;
+unsigned long lastAccurateWeightMeasuredAt = 0;
+unsigned long accurateWeightMeasureStartedAt = 0;
 
 // Time settings
 int feedStartHour = 0;
@@ -136,15 +155,43 @@ const String speedCmdTopic = "home/cat_feeder/speed";
 
 unsigned long lastMqttUpdateTime = 0;
 unsigned long lastMqttDiscovery = 0;
+unsigned long mqttlastReconnectAttempt = 0;
+boolean serverOnline = false;
+
 WiFiClient wifiClient;
 PubSubClient client(wifiClient);
 DynamicJsonDocument deviceInfo(1024);
 
 String status = "";
 
+
+
+/*
+==========================================
+            UTILITIES
+=========================================
+*/
+
+
+
+
+
 void setupMqtt(); // Forward declaration
+void feed();
+void endFeed();
+boolean mqttConnect();
 
 void log(String text) {
+  Serial.println(text);
+}
+
+void logArray(int array[], int size) {
+  String text = "[";
+  for(int i = 0; i < size; i++)
+  {
+    text += "," + String(array[i]);
+  }
+  text += "]";
   Serial.println(text);
 }
 
@@ -167,21 +214,95 @@ int getWeight() {
   // return 0;
 }
 
-int getAccurateWeight() {
-  int maxCount = 0;
-  int mode = 0;
-  std::map<int,int> measures;
-  for (int i=0;i<ACCURATE_WEIGHT_MEASURES;i++) {
-      int measure = getWeight();
-      measures[measure]++;
-      if (measures[measure] > maxCount) {
-        maxCount = measures[measure];
-        mode = measure;
+void bubbleSortAsc(int* values, int length)
+{
+   int i, j, flag = 1;
+   int temp;
+   for (i = 1; (i <= length) && flag; i++)
+   {
+      flag = 0;
+      for (j = 0; j < (length - 1); j++)
+      {
+         if (values[j + 1] < values[j])
+         {
+            temp = values[j];
+            values[j] = values[j + 1];
+            values[j + 1] = temp;
+            flag = 1;
+         }
       }
-      delay(100);
-  }
-  return mode;
+   }
 }
+
+void wait(int ms) {
+  waitStart = millis();
+  waitAmount = ms;
+}
+
+boolean isGettingAccurateWeight() {
+  return accurateWeight == -1;
+}
+
+void startGettingAccurateWeigth() {
+  log("Started getting accurate weight");
+  accurateWeightMeasureStartedAt = millis();
+  accurateWeightMeasuresCount = 0;
+  accurateWeight = -1;
+}
+
+void accurateWeightLoop() {
+  unsigned long now = millis();
+  if (now - accurateWeightMeasureStartedAt > ACCURATE_WEIGHT_MEASURE_TIMEOUT) {
+    accurateWeight = getWeight();
+  }
+  if (accurateWeightMeasuresCount < ACCURATE_WEIGHT_MEASURES) {
+    if (now - lastAccurateWeightMeasuredAt > ACCURATE_WEIGHT_MEASURE_DELAY) {
+      lastAccurateWeightMeasuredAt = now;
+      accurateWeightMeasures[accurateWeightMeasuresCount] = getWeight();
+      accurateWeightMeasuresCount++;
+    }
+  }  
+  
+  if (accurateWeightMeasuresCount >= ACCURATE_WEIGHT_MEASURES) {
+    int startI = 0;
+    int endI = ACCURATE_WEIGHT_MEASURES-1;
+    bubbleSortAsc(accurateWeightMeasures, ACCURATE_WEIGHT_MEASURES);
+    int range = accurateWeightMeasures[endI] - accurateWeightMeasures[startI];
+    int trims = 0;
+    while (trims < ACCURATE_WEIGHT_MAX_RANGE_TRIM && range > ACCURATE_WEIGHT_MAX_RANGE) {
+      startI++;
+      endI--;
+      range = accurateWeightMeasures[endI] - accurateWeightMeasures[startI];
+      if (range < 0) {
+        range = -range;
+      }
+      trims++;
+    }
+    if (range > ACCURATE_WEIGHT_MAX_RANGE) {
+      log("ACC W - Range too big");
+      accurateWeightMeasuresCount = 0; // Restart accurate weight measure
+    } else {
+      int sum = 0;
+      for (int i=startI;i<=endI;i++) {
+        sum += accurateWeightMeasures[i];
+      }
+      accurateWeight = sum / (endI - startI + 1);
+    }
+  }
+}
+
+
+
+
+/*
+==========================================
+              MQTT SETUP
+=========================================
+*/
+
+
+
+
 
 void sendMQTTDiscoveryMessage(String discoveryTopic, DynamicJsonDocument doc) {
   char buffer[MQTT_MAX_PACKET_SIZE];
@@ -371,56 +492,7 @@ boolean sendMqttStatus(float weight) {
 }
 
 boolean sendMqttStatus() {
-  return sendMqttStatus(getAccurateWeight());
-}
-
-void doStep(int steps, bool clockwise) {
-  if (clockwise) {
-    digitalWrite(DIR_PIN, CLOCKWISE);
-  } else {
-    digitalWrite(DIR_PIN, COUNTER_CLOCKWISE);
-  }
-  for (int x = 0; x < steps * 1; x++) {
-      digitalWrite(STEP_PIN, HIGH);
-      delayMicroseconds(stepDelay);
-      digitalWrite(STEP_PIN, LOW);
-      delayMicroseconds(stepDelay);
-   }
-}
-
-void push(int steps) {
-  doStep(steps, false);
-}
-
-void pull(int steps) {
-  doStep(steps, true);
-}
-
-void endFeed() {
-  pull(pullbackSteps*2);
-  log("Stop turning at steps: " + String(stepsCount));
-  isRunning = false;
-  lastDosis = startingWeight-getAccurateWeight();
-  sendMqttStatus();
-}
-
-void feed() {
-  log("Requested feed");
-  if (!isRunning) {
-    log("Starting feed");
-    startingWeight = getAccurateWeight();
-    runningWeight = startingWeight;
-    dosis = 0;
-    lastDosis = 0;
-    stepsCount = 0;
-    lastHourRun = hours;
-    lastMinutesRun = minutes;
-    isRunning = true;
-
-    clogDetectedTimes = 0;
-    sendMqttStatus();
-  }
-  log("Feed done");
+  return sendMqttStatus(getWeight());
 }
 
 void storeAmount(int val) {
@@ -475,8 +547,13 @@ void storeSpeed(int val) {
 }
 
 void handleHassStatusChange(String message) {
-  if (message == MQTT_ONLINE) {
-      setupMqtt();
+  log("Handling message: " + message);
+  if (!serverOnline && message == MQTT_ONLINE) {
+    serverOnline = true;
+    mqttConnect();
+  } else if(serverOnline && message == MQTT_OFFLINE) {
+    serverOnline = false;
+    mqttConnect();
   }
 }
 
@@ -527,9 +604,70 @@ bool setOnline() {
   return client.publish(availabilityTopic.c_str(), MQTT_ONLINE, true);
 }
 
+void mqttDiscovery() {
+  sendMQTTAmountDiscoveryMessage();
+  sendMQTTWeightDiscoveryMessage();
+  sendMQTTRunningDiscoveryMessage();
+  sendMQTTWeightBasedDiscoveryMessage();
+  sendMQTTCloggedDiscoveryMessage();
+  sendMQTTFlowDiscoveryMessage();
+  sendMQTTScaleZeroDiscoveryMessage();
+  sendMQTTClogToleranceDiscoveryMessage();
+  sendMQTTPullbackDegreesDiscoveryMessage();
+  sendMQTTLastDosisDiscoveryMessage();
+  sendMQTTSpeedDiscoveryMessage();
+  sendMQTTErrorDiscoveryMessage();
+  lastMqttDiscovery = millis();
+}
+
+void mqttSubscribe() {
+  client.subscribe(dosageCmdTopic.c_str());
+  client.subscribe(runningCmdTopic.c_str());
+  client.subscribe(weightBasedCmdTopic.c_str());
+  client.subscribe(flowCmdTopic.c_str());
+  client.subscribe(scaleZeroCmdTopic.c_str());
+  client.subscribe(clogToleranceCmdTopic.c_str());
+  client.subscribe(pullbackDegreesCmdTopic.c_str());
+  client.subscribe(speedCmdTopic.c_str());
+  client.subscribe(MQTT_HASS_STATUS_TOPIC.c_str());
+}
+
+bool mqttConnect() {
+  Serial.println("Attempting MQTT connection...");
+  if (client.connect(mqttName.c_str(), MQTT_USER, MQTT_PASS, availabilityTopic.c_str(), 1, true, MQTT_OFFLINE)) {
+    stat("Connected to MQTT");
+  } else {
+    stat("Failed mqtt connect with state " + String(client.state()));
+    return false;
+  }
+
+  if (client.connected()) {
+    mqttDiscovery();
+    mqttSubscribe();
+    setOnline();
+    sendMqttStatus();
+  }
+  return client.connected();
+}
+
+void mqttClientLoop() {
+  if(!client.connected()) {
+    unsigned long now = millis();
+    if (now - mqttlastReconnectAttempt > MQTT_RECONNECT_FREQUENCY) {
+      mqttlastReconnectAttempt = now;
+      if (mqttConnect()) {
+        mqttlastReconnectAttempt = 0;
+        client.loop();
+      }
+    }
+  } else {
+    client.loop();
+  }
+  
+}
+
 void setupMqtt() {
   log("Setting up mqtt");
-  lastMqttDiscovery = millis();
   client.setBufferSize(MQTT_MAX_PACKET_SIZE);
   client.setServer(MQTT_HOST, MQTT_PORT);
   client.setCallback(mqttCallback);
@@ -539,65 +677,69 @@ void setupMqtt() {
   deviceInfo["manufacturer"] = AUTHOR;
   deviceInfo["name"] = DEVICE_NAME;
   unsigned long start = millis();
-  while (!client.connected() && millis()-start < MQTT_CONNECT_TIMEOUT) {
-    Serial.print(".");
-
-    if (client.connect(mqttName.c_str(), MQTT_USER, MQTT_PASS, availabilityTopic.c_str(), 1, true, MQTT_OFFLINE)) {
-      sendMQTTAmountDiscoveryMessage();
-      sendMQTTWeightDiscoveryMessage();
-      sendMQTTRunningDiscoveryMessage();
-      sendMQTTWeightBasedDiscoveryMessage();
-      sendMQTTCloggedDiscoveryMessage();
-      sendMQTTFlowDiscoveryMessage();
-      sendMQTTScaleZeroDiscoveryMessage();
-      sendMQTTClogToleranceDiscoveryMessage();
-      sendMQTTPullbackDegreesDiscoveryMessage();
-      sendMQTTLastDosisDiscoveryMessage();
-      sendMQTTSpeedDiscoveryMessage();
-      sendMQTTErrorDiscoveryMessage();
-      client.subscribe(dosageCmdTopic.c_str());
-      client.subscribe(runningCmdTopic.c_str());
-      client.subscribe(weightBasedCmdTopic.c_str());
-      client.subscribe(flowCmdTopic.c_str());
-      client.subscribe(scaleZeroCmdTopic.c_str());
-      client.subscribe(clogToleranceCmdTopic.c_str());
-      client.subscribe(pullbackDegreesCmdTopic.c_str());
-      client.subscribe(speedCmdTopic.c_str());
-      
-      client.subscribe(MQTT_HASS_STATUS_TOPIC.c_str());
-    } else {
-      log("Failed mqtt connect with state " + String(client.state()));
-      delay(2000);
-    }
-  }
-  Serial.println("");
-  if (client.connected()) {
-    log("Connected to MQTT");
-    setOnline();
-    sendMqttStatus();
-    lastMqttDiscovery = millis();
-  } else {
-    stat("Failed mqtt connect with state " + String(client.state()));
-  }
+  mqttConnect();
 }
 
-void checkTime() {
-  // Serial.println("Updating time...");
-  // timeClient.update();
 
-  // hours = timeClient.getHours();
-  // minutes = timeClient.getMinutes();
-  // Serial.print(daysOfTheWeek[timeClient.getDay()]);
-  // Serial.print(", ");
-  // Serial.print(twoDigit(hours));
-  // Serial.print(":");
-  // Serial.println(twoDigit(minutes));
-  // Serial.println("Done updating time");
 
-  // if (!isRunning && hoursFrequency > 0 && hours != lastHourRun && minutes >= feedStartMinutes && (hours-feedStartHour)%hoursFrequency==0) {
-  //   feed();
-  // }
-  
+/*
+==========================================
+            FEED FUNCTIONS
+=========================================
+*/
+
+
+
+
+void doStep(int steps, bool clockwise) {
+  if (clockwise) {
+    digitalWrite(DIR_PIN, CLOCKWISE);
+  } else {
+    digitalWrite(DIR_PIN, COUNTER_CLOCKWISE);
+  }
+  for (int x = 0; x < steps * 1; x++) {
+      digitalWrite(STEP_PIN, HIGH);
+      delayMicroseconds(stepDelay);
+      digitalWrite(STEP_PIN, LOW);
+      delayMicroseconds(stepDelay);
+   }
+}
+
+void push(int steps) {
+  doStep(steps, false);
+}
+
+void pull(int steps) {
+  doStep(steps, true);
+}
+
+void endFeed() {
+  pull(pullbackSteps*2);
+  log("Stop turning at steps: " + String(stepsCount));
+  isRunning = false;
+  lastDosis = dosis;
+  sendMqttStatus();
+}
+
+void feed() {
+  log("Requested feed");
+  if (!isRunning) {
+    log("Starting feed");
+    feedStart = millis();
+    startGettingAccurateWeigth();
+    startingWeight = MISSING_STARTING_WEIGHT;
+    runningWeight = MISSING_STARTING_WEIGHT;
+    dosis = 0;
+    lastDosis = 0;
+    stepsCount = 0;
+    lastHourRun = hours;
+    lastMinutesRun = minutes;
+    isRunning = true;
+
+    clogDetectedTimes = 0;
+    sendMqttStatus();
+  }
+  log("Feed done");
 }
 
 void wifiConnect() {
@@ -608,7 +750,7 @@ void wifiConnect() {
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   while (WiFi.status() != WL_CONNECTED || millis()-start > WIFI_CONNECT_TIMEOUT)
   {  
-    delay(1000);
+    delay(200);
     Serial.print(".");
   }
   Serial.println("");
@@ -691,41 +833,41 @@ void detectClogging() {
   }  
 }
 
-boolean isFeedingEnd() {
+boolean isReallyFeedingEnd() {
   if (!isWeightBased) {
-    return (float)stepsCount/STEPS >= numberOfRevolutions; 
+    return true;
+  } else if (isGettingAccurateWeight()) {
+    return false;
   } else {
+    dosis = startingWeight-accurateWeight;
     return dosis >= amount;
   }
 }
 
-boolean isReallyFeedingEnd() {
+boolean isFeedingEnd() {
   if (!isWeightBased) {
-    return true;
+    return (float)stepsCount/STEPS >= numberOfRevolutions; 
   } else {
-    dosis = startingWeight-getAccurateWeight();
-    return isFeedingEnd();
+    boolean isEnd = dosis >= amount;
+    if (isEnd && !isReallyFeedingEnd() && !isGettingAccurateWeight()) {
+      startGettingAccurateWeigth();
+    }
+    return isEnd;
   }
 }
 
 void loop() {
-  // unsigned long currentMillis = millis();
-  // if (currentMillis-lastMillis >= TIME_UPDATE_INTERVAL) {
-  //   lastMillis = currentMillis;
-  //   checkTime();
-  // }
-  if (!WiFi.status() == WL_CONNECTED) {
-    stat("Wifi disconnected with status: " + WiFi.status());
-  }
-  if (!client.connected()) {
-    log("Detected client disconnected.");
-    if (status == "") {
-      stat("MQTT Client disconnected");
-    }
-    setupMqtt();
-  }
+  unsigned long now = millis();
   
-  if (isRunning) {
+  if (isGettingAccurateWeight()) {
+    accurateWeightLoop();
+  } else if (now - waitStart < waitAmount){
+    // Waiting...
+  } else if (isRunning) {
+    if (startingWeight == MISSING_STARTING_WEIGHT) {
+      startingWeight = accurateWeight;
+      runningWeight = startingWeight;
+    }
     digitalWrite(STEPPER_ENABLE_PIN, STEPPER_ENABLED);
     if (isPullBack) {
       log("Start pullback: " + String(pullbackSteps));
@@ -734,34 +876,55 @@ void loop() {
       isPullBack = false;
       detectClogging();
       log("End pullback");
+    } else if (isFeedingEnd() && isReallyFeedingEnd()) {
+      endFeed();
     } else {
       push(stepsPerLoop);
       stepsCount += stepsPerLoop;
 
-      if (stepsCount % scaleFrequency == 0) {
-        runningWeight = getAccurateWeight();
-      } else {
-        runningWeight = getWeight();
-      }
+      runningWeight = getWeight();
       dosis = startingWeight-runningWeight;
       sendMqttStatus(runningWeight);
-      
-      if (isFeedingEnd() && isReallyFeedingEnd()) {
-        endFeed();
-      }
+
       if (stepsCount%pullbackFrequency == 0) {
         isPullBack = true;
       }
     }
   } else {
     digitalWrite(STEPPER_ENABLE_PIN, STEPPER_DISABLED);
+    /*
+    if (now - lastAccurateWeightMeasuredAt > ACCURATE_WEIGHT_MEASURE_FREQUENCY) {
+      startGettingAccurateWeigth();
+    }
+    */
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    stat("Wifi disconnected: " + WiFi.status());
+    if (now - wifiLastConnectedAt > WIFI_CONNECT_TIMEOUT) {
+      wifiConnect();
+    } else {
+      delay(100);
+      return;
+    }
+  } else {
+    wifiLastConnectedAt = now;
+  }
+  if (!client.connected()) {
+    log("Detected client disconnected.");
+    if (status == "") {
+      stat("MQTT Client disconnected");
+    }
+    mqttConnect();
+  } else {
     unsigned long exTime = millis();
     if (exTime < lastMqttUpdateTime || exTime-lastMqttUpdateTime > MQTT_PERIODIC_UPDATE_INTERVAL) {
       sendMqttStatus();
     }
     if (exTime < lastMqttDiscovery || exTime-lastMqttDiscovery > MQTT_DISCOVERY_REMINDER_FREQUENCY) {
-      setupMqtt();
+      mqttConnect();
     }
   }
-  client.loop();
+
+  mqttClientLoop();
 }
