@@ -52,6 +52,7 @@
 // Scale Constants
 #define SCALE_DAT_PIN D3
 #define SCALE_CLK_PIN D4
+#define SCALE_MEASURES 3
 #define SCALE_CALIB_FACTOR 466300.0
 #define ACCURATE_WEIGHT_MEASURES 10
 #define ACCURATE_WEIGHT_MEASURE_DELAY 100
@@ -60,6 +61,10 @@
 #define ACCURATE_WEIGHT_MAX_RANGE_TRIM 1
 #define MISSING_STARTING_WEIGHT -99999
 #define ACCURATE_WEIGHT_MEASURE_TIMEOUT 5000
+
+#define SMOOTH_WEIGHT_MEASURES 12
+#define SMOOTH_WEIGHT_MAX_RANGE 5
+#define SMOOTH_WEIGHT_MAX_TRIMS 3
 
 
 // MQTT Constants
@@ -117,11 +122,16 @@ int lastDosis = 0;
 int scaleFrequency = 90*degreeSteps;
 boolean isClogged = false;
 int clogDetectedTimes = 0;
+
 int accurateWeightMeasuresCount = 0;
 int accurateWeightMeasures[ACCURATE_WEIGHT_MEASURES];
 int accurateWeight = 0;
 unsigned long lastAccurateWeightMeasuredAt = 0;
 unsigned long accurateWeightMeasureStartedAt = 0;
+
+int smoothWeight[SMOOTH_WEIGHT_MEASURES];
+int smoothWeigthIndex = 0;
+unsigned long lastSmoothWeightMeasuredAt = 0;
 
 // Time settings
 int feedStartHour = 0;
@@ -210,8 +220,7 @@ String twoDigit(int val) {
 }
 
 int getWeight() {
-  return (int)(scale.get_units()*1000)-scale_zero;
-  // return 0;
+  return (int)(scale.get_units(SCALE_MEASURES)*1000)-scale_zero;
 }
 
 void bubbleSortAsc(int* values, int length)
@@ -238,6 +247,17 @@ void wait(int ms) {
   waitStart = millis();
   waitAmount = ms;
 }
+
+
+
+/*
+==========================================
+            ACCURATE WEIGHT
+==========================================
+*/
+
+
+
 
 boolean isGettingAccurateWeight() {
   return accurateWeight == -1;
@@ -291,8 +311,45 @@ void accurateWeightLoop() {
   }
 }
 
+/*
+==========================================
+            SMOOTH WEIGHT
+=========================================
+*/
 
+int getAverageCuttingOutliers(int* values, int length, int maxRange, int maxTrim) {
+  int startI = 0;
+  int endI = length-1;
+  bubbleSortAsc(values, length);
+  int range = values[endI] - values[startI];
+  int trims = 0;
+  while (trims < maxTrim && range > maxRange) {
+    startI++;
+    endI--;
+    range = values[endI] - values[startI];
+    if (range < 0) {
+      range = -range;
+    }
+    trims++;
+  }
+  int sum = 0;
+  for (int i=startI;i<=endI;i++) {
+    sum += values[i];
+  }
+  return sum / (endI - startI + 1);
+}
 
+void measureSmoothWeight() {
+  smoothWeight[smoothWeigthIndex] = getWeight();
+  smoothWeigthIndex++;
+  if (smoothWeigthIndex >= SMOOTH_WEIGHT_MEASURES) {
+    smoothWeigthIndex = 0;
+  }
+}
+
+int getSmoothWeight() {
+  return getAverageCuttingOutliers(smoothWeight, SMOOTH_WEIGHT_MEASURES, SMOOTH_WEIGHT_MAX_RANGE, SMOOTH_WEIGHT_MAX_TRIMS);
+}
 
 /*
 ==========================================
@@ -492,7 +549,7 @@ boolean sendMqttStatus(float weight) {
 }
 
 boolean sendMqttStatus() {
-  return sendMqttStatus(getWeight());
+  return sendMqttStatus(getSmoothWeight());
 }
 
 void storeAmount(int val) {
@@ -882,7 +939,7 @@ void loop() {
       push(stepsPerLoop);
       stepsCount += stepsPerLoop;
 
-      runningWeight = getWeight();
+      runningWeight = getSmoothWeight();
       dosis = startingWeight-runningWeight;
       sendMqttStatus(runningWeight);
 
