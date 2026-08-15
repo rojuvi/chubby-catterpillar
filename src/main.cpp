@@ -1,4 +1,5 @@
 #include <config.h>
+#include <scale_utils.h>
 #include <ESP8266WiFi.h>
 #include <EEPROM.h>
 #include <NTPClient.h>
@@ -223,26 +224,6 @@ int getWeight() {
   return (int)(scale.get_units(SCALE_MEASURES)*1000)-scale_zero;
 }
 
-void bubbleSortAsc(int* values, int length)
-{
-   int i, j, flag = 1;
-   int temp;
-   for (i = 1; (i <= length) && flag; i++)
-   {
-      flag = 0;
-      for (j = 0; j < (length - 1); j++)
-      {
-         if (values[j + 1] < values[j])
-         {
-            temp = values[j];
-            values[j] = values[j + 1];
-            values[j + 1] = temp;
-            flag = 1;
-         }
-      }
-   }
-}
-
 void wait(int ms) {
   waitStart = millis();
   waitAmount = ms;
@@ -284,29 +265,12 @@ void accurateWeightLoop() {
   }  
   
   if (accurateWeightMeasuresCount >= ACCURATE_WEIGHT_MEASURES) {
-    int startI = 0;
-    int endI = ACCURATE_WEIGHT_MEASURES-1;
-    bubbleSortAsc(accurateWeightMeasures, ACCURATE_WEIGHT_MEASURES);
-    int range = accurateWeightMeasures[endI] - accurateWeightMeasures[startI];
-    int trims = 0;
-    while (trims < ACCURATE_WEIGHT_MAX_RANGE_TRIM && range > ACCURATE_WEIGHT_MAX_RANGE) {
-      startI++;
-      endI--;
-      range = accurateWeightMeasures[endI] - accurateWeightMeasures[startI];
-      if (range < 0) {
-        range = -range;
-      }
-      trims++;
-    }
-    if (range > ACCURATE_WEIGHT_MAX_RANGE) {
+    MeasureStatistics accuWeight = getAverageCuttingOutliers(accurateWeightMeasures, ACCURATE_WEIGHT_MEASURES, ACCURATE_WEIGHT_MAX_RANGE, ACCURATE_WEIGHT_MAX_RANGE_TRIM);
+    if (accuWeight.max-accuWeight.min > ACCURATE_WEIGHT_MAX_RANGE) {
       log("ACC W - Range too big");
       accurateWeightMeasuresCount = 0; // Restart accurate weight measure
     } else {
-      int sum = 0;
-      for (int i=startI;i<=endI;i++) {
-        sum += accurateWeightMeasures[i];
-      }
-      accurateWeight = sum / (endI - startI + 1);
+      accurateWeight = accuWeight.average;
     }
   }
 }
@@ -317,28 +281,6 @@ void accurateWeightLoop() {
 =========================================
 */
 
-int getAverageCuttingOutliers(int* values, int length, int maxRange, int maxTrim) {
-  int startI = 0;
-  int endI = length-1;
-  bubbleSortAsc(values, length);
-  int range = values[endI] - values[startI];
-  int trims = 0;
-  while (trims < maxTrim && range > maxRange) {
-    startI++;
-    endI--;
-    range = values[endI] - values[startI];
-    if (range < 0) {
-      range = -range;
-    }
-    trims++;
-  }
-  int sum = 0;
-  for (int i=startI;i<=endI;i++) {
-    sum += values[i];
-  }
-  return sum / (endI - startI + 1);
-}
-
 void measureSmoothWeight() {
   smoothWeight[smoothWeigthIndex] = getWeight();
   smoothWeigthIndex++;
@@ -348,7 +290,7 @@ void measureSmoothWeight() {
 }
 
 int getSmoothWeight() {
-  return getAverageCuttingOutliers(smoothWeight, SMOOTH_WEIGHT_MEASURES, SMOOTH_WEIGHT_MAX_RANGE, SMOOTH_WEIGHT_MAX_TRIMS);
+  return getAverageCuttingOutliers(smoothWeight, SMOOTH_WEIGHT_MEASURES, SMOOTH_WEIGHT_MAX_RANGE, SMOOTH_WEIGHT_MAX_TRIMS).average;
 }
 
 /*
