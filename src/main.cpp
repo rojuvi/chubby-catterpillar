@@ -1,5 +1,5 @@
 #include <config.h>
-#include <scale_utils.h>
+// #include <scale_utils.h>
 #include <ESP8266WiFi.h>
 #include <EEPROM.h>
 #include <NTPClient.h>
@@ -53,7 +53,7 @@
 // Scale Constants
 #define SCALE_DAT_PIN D3
 #define SCALE_CLK_PIN D4
-#define SCALE_MEASURES 3
+#define SCALE_MEASURES 1
 #define SCALE_CALIB_FACTOR 466300.0
 #define ACCURATE_WEIGHT_MEASURES 10
 #define ACCURATE_WEIGHT_MEASURE_DELAY 100
@@ -63,13 +63,13 @@
 #define MISSING_STARTING_WEIGHT -99999
 #define ACCURATE_WEIGHT_MEASURE_TIMEOUT 5000
 
-#define SMOOTH_WEIGHT_MEASURES 12
+#define SMOOTH_WEIGHT_MEASURES 8
 #define SMOOTH_WEIGHT_MAX_RANGE 5
-#define SMOOTH_WEIGHT_MAX_TRIMS 3
+#define SMOOTH_WEIGHT_MAX_TRIMS 1
 
 
 // MQTT Constants
-#define MQTT_MAX_PACKET_SIZE 512
+#define MQTT_MAX_PACKET_SIZE 1024
 #define MQTT_PERIODIC_UPDATE_INTERVAL 2000
 #define MQTT_DISCOVERY_REMINDER_FREQUENCY 30000 // 30s
 #define MQTT_CONNECT_TIMEOUT 2000
@@ -111,7 +111,7 @@ boolean isPullBack = false;
 int clog_tolerance = 3;
 
 unsigned long waitStart = 0;
-int waitAmount = 0;
+unsigned int waitAmount = 0;
 
 // Weight based dosage
 boolean isWeightBased = true;
@@ -239,6 +239,55 @@ void wait(int ms) {
 
 
 
+typedef struct {
+    int average;
+    int min;
+    int max;
+} MeasureStatistics;
+
+void bubbleSortAsc(int* values, int length)
+{
+   int i, j, flag = 1;
+   int temp;
+   for (i = 1; (i <= length) && flag; i++)
+   {
+      flag = 0;
+      for (j = 0; j < (length - 1); j++)
+      {
+         if (values[j + 1] < values[j])
+         {
+            temp = values[j];
+            values[j] = values[j + 1];
+            values[j + 1] = temp;
+            flag = 1;
+         }
+      }
+   }
+}
+
+MeasureStatistics getAverageCuttingOutliers(int* values, int length, int maxRange, int maxTrim) {
+  int startI = 0;
+  int endI = length-1;
+  bubbleSortAsc(values, length);
+  int range = values[endI] - values[startI];
+  int trims = 0;
+  while (trims < maxTrim && range > maxRange) {
+    startI++;
+    endI--;
+    range = values[endI] - values[startI];
+    if (range < 0) {
+      range = -range;
+    }
+    trims++;
+  }
+  int sum = 0;
+  for (int i=startI;i<=endI;i++) {
+    sum += values[i];
+  }
+  int average = sum / (endI - startI + 1);
+  MeasureStatistics statistics = {average, values[startI], values[endI]};
+  return statistics;
+}
 
 boolean isGettingAccurateWeight() {
   return accurateWeight == -1;
@@ -281,16 +330,20 @@ void accurateWeightLoop() {
 =========================================
 */
 
+int getSmoothWeight() {
+  return getAverageCuttingOutliers(smoothWeight, SMOOTH_WEIGHT_MEASURES, SMOOTH_WEIGHT_MAX_RANGE, SMOOTH_WEIGHT_MAX_TRIMS).average;
+}
+
 void measureSmoothWeight() {
   smoothWeight[smoothWeigthIndex] = getWeight();
   smoothWeigthIndex++;
   if (smoothWeigthIndex >= SMOOTH_WEIGHT_MEASURES) {
     smoothWeigthIndex = 0;
   }
-}
-
-int getSmoothWeight() {
-  return getAverageCuttingOutliers(smoothWeight, SMOOTH_WEIGHT_MEASURES, SMOOTH_WEIGHT_MAX_RANGE, SMOOTH_WEIGHT_MAX_TRIMS).average;
+  String text = "";
+  for (int i=0;i<SMOOTH_WEIGHT_MEASURES;i++) {
+    text += String(smoothWeight[i]) + ", ";
+  }
 }
 
 /*
@@ -307,7 +360,7 @@ void sendMQTTDiscoveryMessage(String discoveryTopic, DynamicJsonDocument doc) {
   char buffer[MQTT_MAX_PACKET_SIZE];
   size_t n = serializeJson(doc, buffer);
   String message;
-  for (int i = 0; i < n; i++) {
+  for (unsigned int i = 0; i < n; i++) {
       message = message + buffer[i];  // convert *byte to string
   }
   client.publish(discoveryTopic.c_str(), buffer, n);
@@ -483,10 +536,10 @@ boolean sendMqttStatus(float weight) {
   boolean sent = client.publish(stateTopic.c_str(), buffer, n);
   if (sent) {
     log("Mqtt Status Sent");
+    lastMqttUpdateTime = millis();
   } else {
     log("Failed to send mqtt status!!");
   }
-  lastMqttUpdateTime = millis();
   return sent;
 }
 
@@ -559,7 +612,7 @@ void handleHassStatusChange(String message) {
 void mqttCallback(char *topic, byte *payload, unsigned int length){
   log("Message arrived in topic: " + String(topic));
   String message;
-  for (int i = 0; i < length; i++) {
+  for (unsigned int i = 0; i < length; i++) {
       message = message + (char) payload[i];  // convert *byte to string
   }
   log("Message: "+ message);
@@ -675,7 +728,6 @@ void setupMqtt() {
   deviceInfo["identifiers"] = DEVICE_ID;
   deviceInfo["manufacturer"] = AUTHOR;
   deviceInfo["name"] = DEVICE_NAME;
-  unsigned long start = millis();
   mqttConnect();
 }
 
@@ -898,8 +950,10 @@ void loop() {
     */
   }
 
+  measureSmoothWeight();
+
   if (WiFi.status() != WL_CONNECTED) {
-    stat("Wifi disconnected: " + WiFi.status());
+    stat("Wifi disconnected: " + String(WiFi.status()));
     if (now - wifiLastConnectedAt > WIFI_CONNECT_TIMEOUT) {
       wifiConnect();
     } else {
