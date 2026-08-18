@@ -54,6 +54,7 @@
 #define SCALE_DAT_PIN D3
 #define SCALE_CLK_PIN D4
 #define SCALE_MEASURES 1
+#define RUNNING_WEIGHT_SCALE_MEASURES 3
 #define SCALE_CALIB_FACTOR 466300.0
 #define ACCURATE_WEIGHT_MEASURES 10
 #define ACCURATE_WEIGHT_MEASURE_DELAY 100
@@ -82,12 +83,12 @@
 
 
 // Wifi config
-#define WIFI_CONNECT_TIMEOUT 30000
-IPAddress ip(192,168,1,142);     
-IPAddress gateway(192,168,1,1);   
-IPAddress subnet(255,255,255,0);
-IPAddress dns1(192,168,1,1);
-IPAddress dns2(1,1,1,1);
+#define WIFI_CONNECT_TIMEOUT 10000
+// IPAddress ip(192,168,1,142);     
+// IPAddress gateway(192,168,1,1);   
+// IPAddress subnet(255,255,255,0);
+// IPAddress dns1(192,168,1,1);
+// IPAddress dns2(1,1,1,1);
 
 unsigned long wifiLastConnectedAt = 0;
 
@@ -220,8 +221,12 @@ String twoDigit(int val) {
   return out;
 }
 
+int getAvgWeight(int measures) {
+  return (int)(scale.get_units(measures)*1000)-scale_zero;
+}
+
 int getWeight() {
-  return (int)(scale.get_units(SCALE_MEASURES)*1000)-scale_zero;
+  return getAvgWeight(SCALE_MEASURES);
 }
 
 void wait(int ms) {
@@ -698,6 +703,7 @@ bool mqttConnect() {
     mqttSubscribe();
     setOnline();
     sendMqttStatus();
+    client.loop();
   }
   return client.connected();
 }
@@ -797,9 +803,9 @@ void wifiConnect() {
   log("Connecting wifi " + String(WIFI_SSID));
   unsigned long start = millis();
   WiFi.mode(WIFI_STA);
-  WiFi.config(ip, gateway, subnet, dns1, dns2);
+  // WiFi.config(ip, gateway, subnet, dns1, dns2);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  while (WiFi.status() != WL_CONNECTED || millis()-start > WIFI_CONNECT_TIMEOUT)
+  while (WiFi.status() != WL_CONNECTED && millis()-start < WIFI_CONNECT_TIMEOUT)
   {  
     delay(200);
     Serial.print(".");
@@ -832,6 +838,8 @@ void setup() {
 
   Serial.begin(9600);
 
+  Serial.println("Init EEPROM");
+
   // Load programmable data from eeprom
   EEPROM.begin(EEPROM_SIZE);
   EEPROM.get(FREQ_HOURS_ADDR, hoursFrequency);
@@ -853,6 +861,7 @@ void setup() {
   wifiConnect();
 
   // Scale init
+  Serial.println("Init Scale");
   scale.begin(SCALE_DAT_PIN, SCALE_CLK_PIN);
   scale.set_scale(SCALE_CALIB_FACTOR);
   
@@ -933,7 +942,7 @@ void loop() {
       push(stepsPerLoop);
       stepsCount += stepsPerLoop;
 
-      runningWeight = getSmoothWeight();
+      runningWeight = getAvgWeight(RUNNING_WEIGHT_SCALE_MEASURES);
       dosis = startingWeight-runningWeight;
       sendMqttStatus(runningWeight);
 
@@ -943,41 +952,37 @@ void loop() {
     }
   } else {
     digitalWrite(STEPPER_ENABLE_PIN, STEPPER_DISABLED);
-    /*
-    if (now - lastAccurateWeightMeasuredAt > ACCURATE_WEIGHT_MEASURE_FREQUENCY) {
-      startGettingAccurateWeigth();
-    }
-    */
   }
 
   measureSmoothWeight();
 
   if (WiFi.status() != WL_CONNECTED) {
     stat("Wifi disconnected: " + String(WiFi.status()));
-    if (now - wifiLastConnectedAt > WIFI_CONNECT_TIMEOUT) {
+    if (now - wifiLastConnectedAt > 500) {
       wifiConnect();
     } else {
-      delay(100);
-      return;
+      log("Cleaning up WIFI");
+      WiFi.disconnect(true);
     }
   } else {
     wifiLastConnectedAt = now;
   }
-  if (!client.connected()) {
-    log("Detected client disconnected.");
-    if (status == "") {
-      stat("MQTT Client disconnected");
-    }
-    mqttConnect();
-  } else {
-    unsigned long exTime = millis();
-    if (exTime < lastMqttUpdateTime || exTime-lastMqttUpdateTime > MQTT_PERIODIC_UPDATE_INTERVAL) {
-      sendMqttStatus();
-    }
-    if (exTime < lastMqttDiscovery || exTime-lastMqttDiscovery > MQTT_DISCOVERY_REMINDER_FREQUENCY) {
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!client.connected()) {
+      log("Detected client disconnected.");
+      if (status == "") {
+        stat("MQTT Client disconnected");
+      }
       mqttConnect();
+    } else {
+      unsigned long exTime = millis();
+      if (exTime < lastMqttUpdateTime || exTime-lastMqttUpdateTime > MQTT_PERIODIC_UPDATE_INTERVAL) {
+        sendMqttStatus();
+      }
+      if (exTime < lastMqttDiscovery || exTime-lastMqttDiscovery > MQTT_DISCOVERY_REMINDER_FREQUENCY) {
+        mqttConnect();
+      }
+      mqttClientLoop();
     }
   }
-
-  mqttClientLoop();
 }
